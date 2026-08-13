@@ -27,6 +27,11 @@
     --series-6: #008300; /* green */
     --series-7: #4a3aa7; /* violet */
     --series-8: #e34948; /* red */
+    --series-9: #9c6b1f; /* brown — 9번째부터는 점 모양/선 스타일로도 구분 */
+    --series-10: #0a7ea4; /* teal */
+
+    --delta-up: #e34948;
+    --delta-down: #2a78d6;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -50,6 +55,11 @@
       --series-6: #008300;
       --series-7: #9085e9;
       --series-8: #e66767;
+      --series-9: #c98a3a;
+      --series-10: #2ea3cf;
+
+      --delta-up: #e66767;
+      --delta-down: #3987e5;
     }
   }
   :root[data-theme="dark"] {
@@ -73,6 +83,11 @@
     --series-6: #008300;
     --series-7: #9085e9;
     --series-8: #e66767;
+    --series-9: #c98a3a;
+    --series-10: #2ea3cf;
+
+    --delta-up: #e66767;
+    --delta-down: #3987e5;
   }
 
   * { box-sizing: border-box; }
@@ -85,6 +100,7 @@
   .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
   header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
   h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
   .meta { color: var(--text-muted); font-size: 13px; }
   .theme-btn {
     border: 1px solid var(--border); background: var(--chip-bg); color: var(--text-secondary);
@@ -128,6 +144,16 @@
   thead th { color: var(--text-muted); font-weight: 600; }
   tbody tr:hover { background: var(--chip-bg-active); }
   .scroll-x { overflow-x: auto; }
+
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(155px, 1fr)); gap: 8px; margin: 14px 0 4px; }
+  .stat-tile { background: var(--page-plane); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .stat-label { font-size: 11.5px; color: var(--text-muted); display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
+  .stat-label .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .stat-value { font-size: 15px; font-weight: 700; }
+  .stat-delta { font-size: 11.5px; margin-top: 2px; color: var(--text-muted); }
+  .stat-delta.delta-up { color: var(--delta-up); }
+  .stat-delta.delta-down { color: var(--delta-down); }
+  .rank-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
 </style>
 </head>
 <body>
@@ -161,12 +187,20 @@
           <button id="metricCm">CM보험료</button>
         </div>
       </div>
+      <div>
+        <label>표시 방식</label>
+        <div class="metric-toggle">
+          <button id="modeAmount" class="active">금액</button>
+          <button id="modePercent">변동률(%)</button>
+        </div>
+      </div>
     </div>
     <div class="insurer-row" id="insurerRow"></div>
-    <div class="cap-note">동시 비교는 최대 8개 보험사까지 가능합니다 (가독성 · 색상 구분 한계).</div>
+    <div class="cap-note">동시 비교는 최대 10개 보험사까지 가능합니다. 9·10번째는 점 모양/선 스타일로 추가 구분됩니다.</div>
   </div>
 
   <div class="panel">
+    <div class="summary-grid" id="summaryGrid"></div>
     <div class="chart-box"><canvas id="trendChart"></canvas></div>
     <div class="empty-state" id="emptyState" style="display:none;">해당 조합의 데이터가 아직 없습니다.</div>
   </div>
@@ -175,27 +209,57 @@
     <button class="table-toggle" id="tableToggle">표로 보기</button>
     <div class="scroll-x" id="tableWrap" style="display:none;"></div>
   </div>
+
+  <div class="panel">
+    <h2>보험사 순위 분석 — 1위 / Top3 비율 추이</h2>
+    <div class="filters" style="margin-bottom: 10px;">
+      <div>
+        <label for="rankCompanySel">보험사</label>
+        <select id="rankCompanySel"></select>
+      </div>
+    </div>
+    <div class="meta" id="rankScopeLine" style="margin-bottom: 10px;"></div>
+    <div class="rank-stats" id="rankStats"></div>
+    <div class="chart-box" style="height: 280px;"><canvas id="rankChart"></canvas></div>
+    <div class="empty-state" id="rankEmpty" style="display:none;">해당 차종에 순위를 매길 표본(같은 날 2개 이상 보험사 견적)이 아직 없습니다.</div>
+  </div>
 </div>
 
 <script>
-const PALETTE_VARS = ['--series-1','--series-2','--series-3','--series-4','--series-5','--series-6','--series-7','--series-8'];
-const MAX_INSURERS = 8;
+const PALETTE_VARS = ['--series-1','--series-2','--series-3','--series-4','--series-5','--series-6','--series-7','--series-8','--series-9','--series-10'];
+const MAX_INSURERS = 10;
 // 고정 순서 — 색상 슬롯을 항상 같은 보험사에 매핑해 실행 간 일관성 유지
 const INSURER_ORDER = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','롯데손해보험','흥국화재','하나손해보험','한화손보','AXA','프레스티지','캐롯손해보험','MG손해보험'];
 
-function insurerColorVar(name) {
+function insurerVisualIndex(name) {
   let idx = INSURER_ORDER.indexOf(name);
   if (idx === -1 || idx >= PALETTE_VARS.length) idx = Math.abs(hashCode(name)) % PALETTE_VARS.length;
-  return PALETTE_VARS[idx];
+  return idx;
+}
+function insurerColorVar(name) { return PALETTE_VARS[insurerVisualIndex(name)]; }
+function insurerPointStyle(name) {
+  const idx = insurerVisualIndex(name);
+  if (idx === 8) return 'rectRot';
+  if (idx === 9) return 'triangle';
+  return 'circle';
+}
+function insurerDash(name) {
+  const idx = insurerVisualIndex(name);
+  if (idx === 8) return [6, 3];
+  if (idx === 9) return [2, 2];
+  return [];
 }
 function hashCode(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
 function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
 function fmtWon(n) { return n == null ? '-' : n.toLocaleString('ko-KR') + '원'; }
+function fmtPct(n) { return n == null ? '-' : (n > 0 ? '+' : '') + n.toFixed(1) + '%'; }
 
 let DATA = { series: [] };
 let metric = 'total'; // 'total' | 'cm'
+let displayMode = 'amount'; // 'amount' | 'percent'
 let selectedInsurers = new Set();
 let chart = null;
+let rankChart = null;
 let tableVisible = false;
 
 const el = (id) => document.getElementById(id);
@@ -203,9 +267,10 @@ const el = (id) => document.getElementById(id);
 async function boot() {
   const res = await fetch('data.json', { cache: 'no-store' });
   DATA = await res.json();
-  el('metaLine').textContent = `마지막 업데이트: ${DATA.generated_at || '-'}  ·  시리즈 ${DATA.series.length}개`;
+  el('metaLine').textContent = `마지막 업데이트: ${DATA.generated_at || '-'}  ·  시리즈 ${DATA.series.length}개  ·  2026-08-07 이후 데이터`;
 
   buildMakerOptions();
+  buildRankCompanyOptions();
   wireStaticEvents();
   onMakerChange();
 }
@@ -215,6 +280,15 @@ function uniq(arr) { return [...new Set(arr)]; }
 function buildMakerOptions() {
   const makers = uniq(DATA.series.map(s => s.maker)).sort((a, b) => a.localeCompare(b, 'ko'));
   el('makerSel').innerHTML = makers.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+}
+
+function buildRankCompanyOptions() {
+  const insurers = uniq(DATA.series.map(s => s.insurer)).sort((a, b) => {
+    const ia = INSURER_ORDER.indexOf(a), ib = INSURER_ORDER.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+  el('rankCompanySel').innerHTML = insurers.map(i => `<option value="${escapeHtml(i)}">${escapeHtml(i)}</option>`).join('');
+  if (insurers.includes('한화손보')) el('rankCompanySel').value = '한화손보';
 }
 
 function onMakerChange() {
@@ -238,6 +312,7 @@ function onModelChange() {
     `<option value="${escapeHtml(c.key)}">${escapeHtml(c.year)} · ${escapeHtml(c.detail)} · ${escapeHtml(c.trim)}</option>`
   ).join('');
   onSpecChange();
+  renderRanking();
 }
 
 function currentSeriesForSpec() {
@@ -286,23 +361,73 @@ function renderInsurerChips(insurers) {
   });
 }
 
+function valueOf(point) { return metric === 'total' ? point.total : point.cm; }
+
+function computeSeriesChange(s, days) {
+  const byDay = Object.fromEntries(s.points.map(p => [p.day, valueOf(p)]));
+  const present = days.filter(d => byDay[d] != null);
+  if (present.length < 2) return null;
+  const first = byDay[present[0]];
+  const last = byDay[present[present.length - 1]];
+  if (first == null || last == null) return null;
+  const diff = last - first;
+  const pct = first ? (diff / first) * 100 : null;
+  return { first, last, diff, pct, firstDay: present[0], lastDay: present[present.length - 1] };
+}
+
+function renderSummary(seriesForSpec, days) {
+  if (seriesForSpec.length === 0) { el('summaryGrid').innerHTML = ''; return; }
+  el('summaryGrid').innerHTML = seriesForSpec.map(s => {
+    const colorVar = insurerColorVar(s.insurer);
+    const ch = computeSeriesChange(s, days);
+    if (!ch) {
+      return `<div class="stat-tile">
+        <div class="stat-label"><span class="dot" style="background:var(${colorVar})"></span>${escapeHtml(s.insurer)}</div>
+        <div class="stat-value">-</div>
+      </div>`;
+    }
+    const dirClass = ch.diff > 0 ? 'delta-up' : (ch.diff < 0 ? 'delta-down' : '');
+    const sign = ch.diff > 0 ? '+' : '';
+    return `<div class="stat-tile">
+      <div class="stat-label"><span class="dot" style="background:var(${colorVar})"></span>${escapeHtml(s.insurer)}</div>
+      <div class="stat-value">${fmtWon(ch.last)}</div>
+      <div class="stat-delta ${dirClass}">${sign}${ch.diff.toLocaleString('ko-KR')}원 (${fmtPct(ch.pct)})</div>
+    </div>`;
+  }).join('');
+}
+
 function renderChart() {
   const seriesForSpec = currentSeriesForSpec().filter(s => selectedInsurers.has(s.insurer));
   const days = uniq(seriesForSpec.flatMap(s => s.points.map(p => p.day))).sort();
 
   el('emptyState').style.display = seriesForSpec.length === 0 ? 'block' : 'none';
+  renderSummary(seriesForSpec, days);
 
   const datasets = seriesForSpec.map(s => {
     const colorVar = insurerColorVar(s.insurer);
     const color = cssVar(colorVar);
-    const byDay = Object.fromEntries(s.points.map(p => [p.day, metric === 'total' ? p.total : p.cm]));
+    const byDay = Object.fromEntries(s.points.map(p => [p.day, valueOf(p)]));
+    let dataArr;
+    if (displayMode === 'percent') {
+      const present = days.filter(d => byDay[d] != null);
+      const baseline = present.length ? byDay[present[0]] : null;
+      dataArr = days.map(d => {
+        const v = byDay[d];
+        if (v == null || !baseline) return null;
+        return ((v - baseline) / baseline) * 100;
+      });
+    } else {
+      dataArr = days.map(d => byDay[d] ?? null);
+    }
     return {
       label: s.insurer,
-      data: days.map(d => byDay[d] ?? null),
+      data: dataArr,
       borderColor: color,
       backgroundColor: color,
       spanGaps: true,
       borderWidth: 2,
+      borderDash: insurerDash(s.insurer),
+      pointStyle: insurerPointStyle(s.insurer),
       pointRadius: 3,
       pointHoverRadius: 5,
       tension: 0.15,
@@ -329,7 +454,11 @@ function renderChart() {
           bodyColor: cssVar('--text-secondary'),
           borderColor: cssVar('--border'),
           borderWidth: 1,
-          callbacks: { label: (item) => `${item.dataset.label}: ${fmtWon(item.parsed.y)}` },
+          callbacks: {
+            label: (item) => displayMode === 'percent'
+              ? `${item.dataset.label}: ${fmtPct(item.parsed.y)}`
+              : `${item.dataset.label}: ${fmtWon(item.parsed.y)}`,
+          },
         },
       },
       scales: {
@@ -339,7 +468,10 @@ function renderChart() {
         },
         y: {
           grid: { color: cssVar('--grid-line') },
-          ticks: { color: cssVar('--text-muted'), callback: (v) => Number(v).toLocaleString('ko-KR') },
+          ticks: {
+            color: cssVar('--text-muted'),
+            callback: (v) => displayMode === 'percent' ? `${Number(v).toFixed(0)}%` : Number(v).toLocaleString('ko-KR'),
+          },
           border: { color: cssVar('--axis-line') },
         },
       },
@@ -353,13 +485,107 @@ function renderTable(days, seriesForSpec) {
   if (!tableVisible) return;
   if (seriesForSpec.length === 0) { el('tableWrap').innerHTML = ''; return; }
   const rows = seriesForSpec.map(s => {
-    const byDay = Object.fromEntries(s.points.map(p => [p.day, metric === 'total' ? p.total : p.cm]));
-    return `<tr><td>${escapeHtml(s.insurer)}</td>${days.map(d => `<td>${fmtWon(byDay[d])}</td>`).join('')}</tr>`;
+    const byDay = Object.fromEntries(s.points.map(p => [p.day, valueOf(p)]));
+    const ch = computeSeriesChange(s, days);
+    return `<tr><td>${escapeHtml(s.insurer)}</td>${days.map(d => `<td>${fmtWon(byDay[d])}</td>`).join('')}<td>${ch ? fmtPct(ch.pct) : '-'}</td></tr>`;
   }).join('');
   el('tableWrap').innerHTML = `<table>
-    <thead><tr><th>보험사</th>${days.map(d => `<th>${d}</th>`).join('')}</tr></thead>
+    <thead><tr><th>보험사</th>${days.map(d => `<th>${d}</th>`).join('')}<th>변동률</th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
+}
+
+function computeRankingTrend(company, maker, model) {
+  const subset = DATA.series.filter(s => s.maker === maker && s.model === model);
+  const dayMap = {}; // day -> specKey -> insurer -> value
+  subset.forEach(s => {
+    const specKey = `${s.year}|||${s.detail}|||${s.trim}`;
+    s.points.forEach(p => {
+      const val = valueOf(p);
+      if (val == null) return;
+      dayMap[p.day] = dayMap[p.day] || {};
+      dayMap[p.day][specKey] = dayMap[p.day][specKey] || {};
+      dayMap[p.day][specKey][s.insurer] = val;
+    });
+  });
+  const days = Object.keys(dayMap).sort();
+  return days.map(day => {
+    let total = 0, rank1 = 0, top3 = 0;
+    Object.values(dayMap[day]).forEach(group => {
+      const entries = Object.entries(group);
+      if (entries.length < 2) return;
+      if (!(company in group)) return;
+      entries.sort((a, b) => a[1] - b[1]);
+      const rank = entries.findIndex(([ins]) => ins === company) + 1;
+      total++;
+      if (rank === 1) rank1++;
+      if (rank <= 3) top3++;
+    });
+    return { day, total, rank1, top3, pct1: total ? (rank1 / total) * 100 : null, pct3: total ? (top3 / total) * 100 : null };
+  });
+}
+
+function renderRanking() {
+  const maker = el('makerSel').value;
+  const model = el('modelSel').value;
+  const company = el('rankCompanySel').value;
+  if (!maker || !model || !company) return;
+
+  el('rankScopeLine').textContent = `${maker} ${model} 전체 트림 기준 · ${metric === 'total' ? '총보험료(결제)' : 'CM보험료'} 낮은 순 랭킹`;
+
+  const trend = computeRankingTrend(company, maker, model).filter(t => t.total > 0);
+  el('rankEmpty').style.display = trend.length === 0 ? 'block' : 'none';
+
+  const latest = trend[trend.length - 1];
+  el('rankStats').innerHTML = latest ? `
+    <div class="stat-tile"><div class="stat-label">최근(${latest.day}) 1위 비율</div><div class="stat-value">${latest.pct1.toFixed(0)}%</div></div>
+    <div class="stat-tile"><div class="stat-label">최근 Top3 비율</div><div class="stat-value">${latest.pct3.toFixed(0)}%</div></div>
+    <div class="stat-tile"><div class="stat-label">표본(차종·트림 수)</div><div class="stat-value">${latest.total}</div></div>
+  ` : '';
+
+  const ctx = el('rankChart').getContext('2d');
+  if (rankChart) rankChart.destroy();
+  if (trend.length === 0) return;
+  rankChart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: trend.map(t => t.day),
+      datasets: [
+        {
+          label: '1위 비율(%)', data: trend.map(t => t.pct1),
+          borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'),
+          borderWidth: 2, pointRadius: 3, pointHoverRadius: 5, tension: 0.15,
+        },
+        {
+          label: 'Top3 비율(%)', data: trend.map(t => t.pct3),
+          borderColor: cssVar('--series-2'), backgroundColor: cssVar('--series-2'),
+          borderWidth: 2, borderDash: [6, 3], pointRadius: 3, pointHoverRadius: 5, tension: 0.15,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { position: 'bottom', labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+        tooltip: {
+          backgroundColor: cssVar('--surface-1'), titleColor: cssVar('--text-primary'), bodyColor: cssVar('--text-secondary'),
+          borderColor: cssVar('--border'), borderWidth: 1,
+          callbacks: { label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%` },
+        },
+      },
+      scales: {
+        x: { grid: { color: cssVar('--grid-line') }, ticks: { color: cssVar('--text-muted') } },
+        y: {
+          min: 0, max: 100,
+          grid: { color: cssVar('--grid-line') },
+          ticks: { color: cssVar('--text-muted'), callback: (v) => `${v}%` },
+          border: { color: cssVar('--axis-line') },
+        },
+      },
+    },
+  });
 }
 
 function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -370,6 +596,9 @@ function wireStaticEvents() {
   el('specSel').addEventListener('change', onSpecChange);
   el('metricTotal').addEventListener('click', () => setMetric('total'));
   el('metricCm').addEventListener('click', () => setMetric('cm'));
+  el('modeAmount').addEventListener('click', () => setDisplayMode('amount'));
+  el('modePercent').addEventListener('click', () => setDisplayMode('percent'));
+  el('rankCompanySel').addEventListener('change', renderRanking);
   el('tableToggle').addEventListener('click', () => {
     tableVisible = !tableVisible;
     el('tableWrap').style.display = tableVisible ? 'block' : 'none';
@@ -383,6 +612,7 @@ function wireStaticEvents() {
     root.setAttribute('data-theme', next);
     el('themeBtn').textContent = next === 'dark' ? '라이트 모드' : '다크 모드';
     renderChart();
+    renderRanking();
   });
 }
 
@@ -390,6 +620,14 @@ function setMetric(m) {
   metric = m;
   el('metricTotal').classList.toggle('active', m === 'total');
   el('metricCm').classList.toggle('active', m === 'cm');
+  renderChart();
+  renderRanking();
+}
+
+function setDisplayMode(m) {
+  displayMode = m;
+  el('modeAmount').classList.toggle('active', m === 'amount');
+  el('modePercent').classList.toggle('active', m === 'percent');
   renderChart();
 }
 
