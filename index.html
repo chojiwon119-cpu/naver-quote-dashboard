@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>네이버페이 자동차보험 견적 비교</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    color-scheme: light;
+    --surface-1:      #fcfcfb;
+    --page-plane:     #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --grid-line:      #e1e0d9;
+    --axis-line:      #c3c2b7;
+    --border:         rgba(11,11,11,0.10);
+    --chip-bg:        #ffffff;
+    --chip-bg-active: #f0efec;
+
+    --series-1: #2a78d6; /* blue */
+    --series-2: #eb6834; /* orange */
+    --series-3: #1baf7a; /* aqua */
+    --series-4: #eda100; /* yellow */
+    --series-5: #e87ba4; /* magenta */
+    --series-6: #008300; /* green */
+    --series-7: #4a3aa7; /* violet */
+    --series-8: #e34948; /* red */
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface-1:      #1a1a19;
+      --page-plane:     #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --grid-line:      #2c2c2a;
+      --axis-line:      #383835;
+      --border:         rgba(255,255,255,0.10);
+      --chip-bg:        #1a1a19;
+      --chip-bg-active: #262624;
+
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-5: #d55181;
+      --series-6: #008300;
+      --series-7: #9085e9;
+      --series-8: #e66767;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface-1:      #1a1a19;
+    --page-plane:     #0d0d0d;
+    --text-primary:   #ffffff;
+    --text-secondary: #c3c2b7;
+    --text-muted:     #898781;
+    --grid-line:      #2c2c2a;
+    --axis-line:      #383835;
+    --border:         rgba(255,255,255,0.10);
+    --chip-bg:        #1a1a19;
+    --chip-bg-active: #262624;
+
+    --series-1: #3987e5;
+    --series-2: #d95926;
+    --series-3: #199e70;
+    --series-4: #c98500;
+    --series-5: #d55181;
+    --series-6: #008300;
+    --series-7: #9085e9;
+    --series-8: #e66767;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--page-plane);
+    color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .meta { color: var(--text-muted); font-size: 13px; }
+  .theme-btn {
+    border: 1px solid var(--border); background: var(--chip-bg); color: var(--text-secondary);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer;
+  }
+  .panel {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+  .filters label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
+  .filters select {
+    min-width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--chip-bg); color: var(--text-primary); font-size: 13px;
+  }
+  .metric-toggle { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .metric-toggle button {
+    border: none; background: var(--chip-bg); color: var(--text-secondary); padding: 7px 14px;
+    font-size: 13px; cursor: pointer;
+  }
+  .metric-toggle button.active { background: var(--chip-bg-active); color: var(--text-primary); font-weight: 600; }
+  .insurer-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px 5px 8px;
+    border-radius: 999px; border: 1px solid var(--border); background: var(--chip-bg);
+    font-size: 12.5px; color: var(--text-secondary); cursor: pointer; user-select: none;
+  }
+  .chip.active { background: var(--chip-bg-active); color: var(--text-primary); }
+  .chip.disabled { opacity: 0.35; cursor: not-allowed; }
+  .chip .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .cap-note { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
+  .chart-box { position: relative; height: 420px; }
+  .empty-state { color: var(--text-muted); font-size: 13px; padding: 40px 0; text-align: center; }
+  .table-toggle {
+    border: 1px solid var(--border); background: var(--chip-bg); color: var(--text-secondary);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; margin-bottom: 10px;
+  }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: right; padding: 6px 10px; border-bottom: 1px solid var(--grid-line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  thead th { color: var(--text-muted); font-weight: 600; }
+  tbody tr:hover { background: var(--chip-bg-active); }
+  .scroll-x { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>네이버페이 자동차보험 견적 비교</h1>
+      <div class="meta" id="metaLine">데이터 로딩 중…</div>
+    </div>
+    <button class="theme-btn" id="themeBtn">다크 모드</button>
+  </header>
+
+  <div class="panel">
+    <div class="filters">
+      <div>
+        <label for="makerSel">제조사</label>
+        <select id="makerSel"></select>
+      </div>
+      <div>
+        <label for="modelSel">차종</label>
+        <select id="modelSel"></select>
+      </div>
+      <div>
+        <label for="specSel">연식 / 상세모델 / 트림</label>
+        <select id="specSel"></select>
+      </div>
+      <div>
+        <label>기준 보험료</label>
+        <div class="metric-toggle">
+          <button id="metricTotal" class="active">총보험료(결제)</button>
+          <button id="metricCm">CM보험료</button>
+        </div>
+      </div>
+    </div>
+    <div class="insurer-row" id="insurerRow"></div>
+    <div class="cap-note">동시 비교는 최대 8개 보험사까지 가능합니다 (가독성 · 색상 구분 한계).</div>
+  </div>
+
+  <div class="panel">
+    <div class="chart-box"><canvas id="trendChart"></canvas></div>
+    <div class="empty-state" id="emptyState" style="display:none;">해당 조합의 데이터가 아직 없습니다.</div>
+  </div>
+
+  <div class="panel">
+    <button class="table-toggle" id="tableToggle">표로 보기</button>
+    <div class="scroll-x" id="tableWrap" style="display:none;"></div>
+  </div>
+</div>
+
+<script>
+const PALETTE_VARS = ['--series-1','--series-2','--series-3','--series-4','--series-5','--series-6','--series-7','--series-8'];
+const MAX_INSURERS = 8;
+// 고정 순서 — 색상 슬롯을 항상 같은 보험사에 매핑해 실행 간 일관성 유지
+const INSURER_ORDER = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','롯데손해보험','흥국화재','하나손해보험','한화손보','AXA','프레스티지','캐롯손해보험','MG손해보험'];
+
+function insurerColorVar(name) {
+  let idx = INSURER_ORDER.indexOf(name);
+  if (idx === -1 || idx >= PALETTE_VARS.length) idx = Math.abs(hashCode(name)) % PALETTE_VARS.length;
+  return PALETTE_VARS[idx];
+}
+function hashCode(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0; return h; }
+function cssVar(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function fmtWon(n) { return n == null ? '-' : n.toLocaleString('ko-KR') + '원'; }
+
+let DATA = { series: [] };
+let metric = 'total'; // 'total' | 'cm'
+let selectedInsurers = new Set();
+let chart = null;
+let tableVisible = false;
+
+const el = (id) => document.getElementById(id);
+
+async function boot() {
+  const res = await fetch('data.json', { cache: 'no-store' });
+  DATA = await res.json();
+  el('metaLine').textContent = `마지막 업데이트: ${DATA.generated_at || '-'}  ·  시리즈 ${DATA.series.length}개`;
+
+  buildMakerOptions();
+  wireStaticEvents();
+  onMakerChange();
+}
+
+function uniq(arr) { return [...new Set(arr)]; }
+
+function buildMakerOptions() {
+  const makers = uniq(DATA.series.map(s => s.maker)).sort((a, b) => a.localeCompare(b, 'ko'));
+  el('makerSel').innerHTML = makers.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+}
+
+function onMakerChange() {
+  const maker = el('makerSel').value;
+  const models = uniq(DATA.series.filter(s => s.maker === maker).map(s => s.model)).sort((a, b) => a.localeCompare(b, 'ko'));
+  el('modelSel').innerHTML = models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+  onModelChange();
+}
+
+function onModelChange() {
+  const maker = el('makerSel').value;
+  const model = el('modelSel').value;
+  const combos = [];
+  const seen = new Set();
+  DATA.series.filter(s => s.maker === maker && s.model === model).forEach(s => {
+    const key = `${s.year}|||${s.detail}|||${s.trim}`;
+    if (!seen.has(key)) { seen.add(key); combos.push({ key, year: s.year, detail: s.detail, trim: s.trim }); }
+  });
+  combos.sort((a, b) => (a.year + a.detail + a.trim).localeCompare(b.year + b.detail + b.trim, 'ko'));
+  el('specSel').innerHTML = combos.map(c =>
+    `<option value="${escapeHtml(c.key)}">${escapeHtml(c.year)} · ${escapeHtml(c.detail)} · ${escapeHtml(c.trim)}</option>`
+  ).join('');
+  onSpecChange();
+}
+
+function currentSeriesForSpec() {
+  const maker = el('makerSel').value;
+  const model = el('modelSel').value;
+  const specKey = el('specSel').value;
+  if (!specKey) return [];
+  const [year, detail, trim] = specKey.split('|||');
+  return DATA.series.filter(s => s.maker === maker && s.model === model && s.year === year && s.detail === detail && s.trim === trim);
+}
+
+function onSpecChange() {
+  const seriesForSpec = currentSeriesForSpec();
+  const insurers = seriesForSpec.map(s => s.insurer);
+  const ordered = [...insurers].sort((a, b) => {
+    const ia = INSURER_ORDER.indexOf(a), ib = INSURER_ORDER.indexOf(b);
+    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+  });
+  selectedInsurers = new Set(ordered.slice(0, MAX_INSURERS));
+  renderInsurerChips(ordered);
+  renderChart();
+}
+
+function renderInsurerChips(insurers) {
+  const atCap = selectedInsurers.size >= MAX_INSURERS;
+  el('insurerRow').innerHTML = insurers.map(name => {
+    const colorVar = insurerColorVar(name);
+    const active = selectedInsurers.has(name);
+    const disabled = !active && atCap;
+    return `<span class="chip ${active ? 'active' : ''} ${disabled ? 'disabled' : ''}" data-insurer="${escapeHtml(name)}">
+      <span class="dot" style="background:var(${colorVar})"></span>${escapeHtml(name)}
+    </span>`;
+  }).join('');
+  [...el('insurerRow').querySelectorAll('.chip')].forEach(chip => {
+    chip.addEventListener('click', () => {
+      const name = chip.dataset.insurer;
+      if (selectedInsurers.has(name)) {
+        selectedInsurers.delete(name);
+      } else {
+        if (selectedInsurers.size >= MAX_INSURERS) return;
+        selectedInsurers.add(name);
+      }
+      renderInsurerChips(insurers);
+      renderChart();
+    });
+  });
+}
+
+function renderChart() {
+  const seriesForSpec = currentSeriesForSpec().filter(s => selectedInsurers.has(s.insurer));
+  const days = uniq(seriesForSpec.flatMap(s => s.points.map(p => p.day))).sort();
+
+  el('emptyState').style.display = seriesForSpec.length === 0 ? 'block' : 'none';
+
+  const datasets = seriesForSpec.map(s => {
+    const colorVar = insurerColorVar(s.insurer);
+    const color = cssVar(colorVar);
+    const byDay = Object.fromEntries(s.points.map(p => [p.day, metric === 'total' ? p.total : p.cm]));
+    return {
+      label: s.insurer,
+      data: days.map(d => byDay[d] ?? null),
+      borderColor: color,
+      backgroundColor: color,
+      spanGaps: true,
+      borderWidth: 2,
+      pointRadius: 3,
+      pointHoverRadius: 5,
+      tension: 0.15,
+    };
+  });
+
+  const ctx = el('trendChart').getContext('2d');
+  if (chart) chart.destroy();
+  chart = new Chart(ctx, {
+    type: 'line',
+    data: { labels: days, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: {
+          position: 'bottom',
+          labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true },
+        },
+        tooltip: {
+          backgroundColor: cssVar('--surface-1'),
+          titleColor: cssVar('--text-primary'),
+          bodyColor: cssVar('--text-secondary'),
+          borderColor: cssVar('--border'),
+          borderWidth: 1,
+          callbacks: { label: (item) => `${item.dataset.label}: ${fmtWon(item.parsed.y)}` },
+        },
+      },
+      scales: {
+        x: {
+          grid: { color: cssVar('--grid-line') },
+          ticks: { color: cssVar('--text-muted') },
+        },
+        y: {
+          grid: { color: cssVar('--grid-line') },
+          ticks: { color: cssVar('--text-muted'), callback: (v) => Number(v).toLocaleString('ko-KR') },
+          border: { color: cssVar('--axis-line') },
+        },
+      },
+    },
+  });
+
+  renderTable(days, seriesForSpec);
+}
+
+function renderTable(days, seriesForSpec) {
+  if (!tableVisible) return;
+  if (seriesForSpec.length === 0) { el('tableWrap').innerHTML = ''; return; }
+  const rows = seriesForSpec.map(s => {
+    const byDay = Object.fromEntries(s.points.map(p => [p.day, metric === 'total' ? p.total : p.cm]));
+    return `<tr><td>${escapeHtml(s.insurer)}</td>${days.map(d => `<td>${fmtWon(byDay[d])}</td>`).join('')}</tr>`;
+  }).join('');
+  el('tableWrap').innerHTML = `<table>
+    <thead><tr><th>보험사</th>${days.map(d => `<th>${d}</th>`).join('')}</tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
+function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function wireStaticEvents() {
+  el('makerSel').addEventListener('change', onMakerChange);
+  el('modelSel').addEventListener('change', onModelChange);
+  el('specSel').addEventListener('change', onSpecChange);
+  el('metricTotal').addEventListener('click', () => setMetric('total'));
+  el('metricCm').addEventListener('click', () => setMetric('cm'));
+  el('tableToggle').addEventListener('click', () => {
+    tableVisible = !tableVisible;
+    el('tableWrap').style.display = tableVisible ? 'block' : 'none';
+    el('tableToggle').textContent = tableVisible ? '표 숨기기' : '표로 보기';
+    if (tableVisible) renderChart();
+  });
+  el('themeBtn').addEventListener('click', () => {
+    const root = document.documentElement;
+    const cur = root.getAttribute('data-theme');
+    const next = cur === 'dark' ? 'light' : 'dark';
+    root.setAttribute('data-theme', next);
+    el('themeBtn').textContent = next === 'dark' ? '라이트 모드' : '다크 모드';
+    renderChart();
+  });
+}
+
+function setMetric(m) {
+  metric = m;
+  el('metricTotal').classList.toggle('active', m === 'total');
+  el('metricCm').classList.toggle('active', m === 'cm');
+  renderChart();
+}
+
+boot();
+</script>
+</body>
+</html>
