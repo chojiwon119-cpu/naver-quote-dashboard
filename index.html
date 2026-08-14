@@ -32,6 +32,8 @@
 
     --delta-up: #e34948;
     --delta-down: #2a78d6;
+    --cmp-good: #0ca30c;
+    --cmp-bad: #e34948;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) {
@@ -60,6 +62,8 @@
 
       --delta-up: #e66767;
       --delta-down: #3987e5;
+      --cmp-good: #0ca30c;
+      --cmp-bad: #e66767;
     }
   }
   :root[data-theme="dark"] {
@@ -88,6 +92,8 @@
 
     --delta-up: #e66767;
     --delta-down: #3987e5;
+    --cmp-good: #0ca30c;
+    --cmp-bad: #e66767;
   }
 
   * { box-sizing: border-box; }
@@ -154,6 +160,10 @@
   .stat-delta.delta-up { color: var(--delta-up); }
   .stat-delta.delta-down { color: var(--delta-down); }
   .rank-stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .cmp-good { color: var(--cmp-good); }
+  .cmp-bad { color: var(--cmp-bad); }
+  .mover-row { cursor: pointer; }
+  .panel-sub { font-size: 12.5px; color: var(--text-muted); margin: -4px 0 12px; }
 </style>
 </head>
 <body>
@@ -196,7 +206,14 @@
       </div>
     </div>
     <div class="insurer-row" id="insurerRow"></div>
-    <div class="cap-note">동시 비교는 최대 10개 보험사까지 가능합니다. 9·10번째는 점 모양/선 스타일로 추가 구분됩니다.</div>
+    <div class="cap-note">동시 비교는 최대 10개 보험사까지 가능합니다. 9·10번째는 점 모양/선 스타일로 추가 구분됩니다. 보험료 낮은 순으로 정렬됩니다.</div>
+  </div>
+
+  <div class="panel">
+    <h2>한화손보 대비 비교 (우리 회사 기준)</h2>
+    <div class="panel-sub" id="hanwhaScopeLine"></div>
+    <div class="scroll-x" id="hanwhaWrap"></div>
+    <div class="empty-state" id="hanwhaEmpty" style="display:none;">이 차종엔 한화손보 견적이 없습니다.</div>
   </div>
 
   <div class="panel">
@@ -208,6 +225,20 @@
   <div class="panel">
     <button class="table-toggle" id="tableToggle">표로 보기</button>
     <div class="scroll-x" id="tableWrap" style="display:none;"></div>
+  </div>
+
+  <div class="panel">
+    <h2>가격 변동 큰 차량 찾기</h2>
+    <div class="filters" style="margin-bottom: 10px;">
+      <div class="metric-toggle" id="moversFilterToggle">
+        <button id="moversAll" class="active">전체</button>
+        <button id="moversUp">상승만</button>
+        <button id="moversDown">하락만</button>
+      </div>
+    </div>
+    <div class="panel-sub">전체 차종 대상 · 변동률 큰 순서로 최대 30건 · 클릭하면 위 그래프로 바로 이동합니다.</div>
+    <div class="scroll-x" id="moversWrap"></div>
+    <div class="empty-state" id="moversEmpty" style="display:none;">변동이 있는 차량이 아직 없습니다.</div>
   </div>
 
   <div class="panel">
@@ -273,6 +304,8 @@ async function boot() {
   buildRankCompanyOptions();
   wireStaticEvents();
   onMakerChange();
+  renderRanking();
+  renderMovers();
 }
 
 function uniq(arr) { return [...new Set(arr)]; }
@@ -312,7 +345,6 @@ function onModelChange() {
     `<option value="${escapeHtml(c.key)}">${escapeHtml(c.year)} · ${escapeHtml(c.detail)} · ${escapeHtml(c.trim)}</option>`
   ).join('');
   onSpecChange();
-  renderRanking();
 }
 
 function currentSeriesForSpec() {
@@ -325,25 +357,22 @@ function currentSeriesForSpec() {
 }
 
 function onSpecChange() {
-  const seriesForSpec = currentSeriesForSpec();
-  const insurers = seriesForSpec.map(s => s.insurer);
-  const ordered = [...insurers].sort((a, b) => {
-    const ia = INSURER_ORDER.indexOf(a), ib = INSURER_ORDER.indexOf(b);
-    return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
-  });
+  const seriesForSpec = sortByPriceAsc(currentSeriesForSpec());
+  const ordered = seriesForSpec.map(s => s.insurer);
   selectedInsurers = new Set(ordered.slice(0, MAX_INSURERS));
   renderInsurerChips(ordered);
   renderChart();
+  renderHanwhaCompare();
 }
 
 function renderInsurerChips(insurers) {
   const atCap = selectedInsurers.size >= MAX_INSURERS;
-  el('insurerRow').innerHTML = insurers.map(name => {
+  el('insurerRow').innerHTML = insurers.map((name, idx) => {
     const colorVar = insurerColorVar(name);
     const active = selectedInsurers.has(name);
     const disabled = !active && atCap;
     return `<span class="chip ${active ? 'active' : ''} ${disabled ? 'disabled' : ''}" data-insurer="${escapeHtml(name)}">
-      <span class="dot" style="background:var(${colorVar})"></span>${escapeHtml(name)}
+      <span class="dot" style="background:var(${colorVar})"></span>${idx + 1}위 ${escapeHtml(name)}
     </span>`;
   }).join('');
   [...el('insurerRow').querySelectorAll('.chip')].forEach(chip => {
@@ -362,6 +391,24 @@ function renderInsurerChips(insurers) {
 }
 
 function valueOf(point) { return metric === 'total' ? point.total : point.cm; }
+
+function latestValue(s) {
+  const days = s.points.map(p => p.day).sort();
+  if (!days.length) return null;
+  const lastDay = days[days.length - 1];
+  const pt = s.points.find(p => p.day === lastDay);
+  return pt ? valueOf(pt) : null;
+}
+
+function sortByPriceAsc(seriesArr) {
+  return [...seriesArr].sort((a, b) => {
+    const va = latestValue(a), vb = latestValue(b);
+    if (va == null && vb == null) return 0;
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    return va - vb;
+  });
+}
 
 function computeSeriesChange(s, days) {
   const byDay = Object.fromEntries(s.points.map(p => [p.day, valueOf(p)]));
@@ -397,7 +444,7 @@ function renderSummary(seriesForSpec, days) {
 }
 
 function renderChart() {
-  const seriesForSpec = currentSeriesForSpec().filter(s => selectedInsurers.has(s.insurer));
+  const seriesForSpec = sortByPriceAsc(currentSeriesForSpec().filter(s => selectedInsurers.has(s.insurer)));
   const days = uniq(seriesForSpec.flatMap(s => s.points.map(p => p.day))).sort();
 
   el('emptyState').style.display = seriesForSpec.length === 0 ? 'block' : 'none';
@@ -495,11 +542,98 @@ function renderTable(days, seriesForSpec) {
   </table>`;
 }
 
-function computeRankingTrend(company, maker, model) {
-  const subset = DATA.series.filter(s => s.maker === maker && s.model === model);
+function renderHanwhaCompare() {
+  const seriesForSpec = currentSeriesForSpec();
+  const maker = el('makerSel').value;
+  const model = el('modelSel').value;
+  const specText = el('specSel').selectedOptions[0] ? el('specSel').selectedOptions[0].textContent : '';
+  el('hanwhaScopeLine').textContent = `${maker} ${model} · ${specText} · ${metric === 'total' ? '총보험료(결제)' : 'CM보험료'} 기준`;
+
+  const hanwha = seriesForSpec.find(s => s.insurer === '한화손보');
+  const hanwhaVal = hanwha ? latestValue(hanwha) : null;
+  if (!hanwha || hanwhaVal == null) {
+    el('hanwhaEmpty').style.display = 'block';
+    el('hanwhaWrap').innerHTML = '';
+    return;
+  }
+  el('hanwhaEmpty').style.display = 'none';
+
+  const sorted = sortByPriceAsc(seriesForSpec);
+  el('hanwhaWrap').innerHTML = `<table>
+    <thead><tr><th style="text-align:left;">순위</th><th style="text-align:left;">보험사</th><th>최신가</th><th>한화손보 대비</th></tr></thead>
+    <tbody>${sorted.map((s, idx) => {
+      const val = latestValue(s);
+      const isUs = s.insurer === '한화손보';
+      const diff = val != null ? val - hanwhaVal : null;
+      const pct = (val != null && hanwhaVal) ? (diff / hanwhaVal) * 100 : null;
+      const cls = isUs ? '' : (diff > 0 ? 'cmp-good' : (diff < 0 ? 'cmp-bad' : ''));
+      const label = isUs ? '기준(우리 회사)' : (diff == null ? '-' : `${diff > 0 ? '+' : ''}${diff.toLocaleString('ko-KR')}원 (${fmtPct(pct)})`);
+      return `<tr style="${isUs ? 'font-weight:700;' : ''}">
+        <td style="text-align:left;">${idx + 1}</td>
+        <td style="text-align:left;"><span class="dot" style="background:var(${insurerColorVar(s.insurer)}); display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;"></span>${escapeHtml(s.insurer)}</td>
+        <td>${fmtWon(val)}</td>
+        <td class="${cls}">${label}</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+}
+
+function computeGlobalMovers(dir) {
+  const rows = [];
+  DATA.series.forEach(s => {
+    const days = s.points.map(p => p.day).sort();
+    const ch = computeSeriesChange(s, days);
+    if (!ch || ch.pct == null || ch.diff === 0) return;
+    if (dir === 'up' && ch.diff <= 0) return;
+    if (dir === 'down' && ch.diff >= 0) return;
+    rows.push({ s, ch });
+  });
+  rows.sort((a, b) => Math.abs(b.ch.pct) - Math.abs(a.ch.pct));
+  return rows.slice(0, 30);
+}
+
+let moversFilter = 'all';
+
+function renderMovers() {
+  const rows = computeGlobalMovers(moversFilter === 'all' ? null : moversFilter);
+  el('moversEmpty').style.display = rows.length === 0 ? 'block' : 'none';
+  if (rows.length === 0) { el('moversWrap').innerHTML = ''; return; }
+  el('moversWrap').innerHTML = `<table>
+    <thead><tr><th style="text-align:left;">차량</th><th style="text-align:left;">보험사</th><th>최신가</th><th>변동</th></tr></thead>
+    <tbody>${rows.map(({ s, ch }) => {
+      const dirClass = ch.diff > 0 ? 'delta-up' : 'delta-down';
+      const key = [s.maker, s.model, s.year, s.detail, s.trim].join('|||');
+      return `<tr class="mover-row" data-key="${escapeHtml(key)}">
+        <td style="text-align:left;">${escapeHtml(s.maker)} ${escapeHtml(s.model)} · ${escapeHtml(s.detail)} ${escapeHtml(s.trim)}</td>
+        <td style="text-align:left;"><span class="dot" style="background:var(${insurerColorVar(s.insurer)}); display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px;"></span>${escapeHtml(s.insurer)}</td>
+        <td>${fmtWon(ch.last)}</td>
+        <td class="${dirClass}">${fmtPct(ch.pct)} (${ch.diff > 0 ? '+' : ''}${ch.diff.toLocaleString('ko-KR')}원)</td>
+      </tr>`;
+    }).join('')}</tbody>
+  </table>`;
+  [...el('moversWrap').querySelectorAll('.mover-row')].forEach(row => {
+    row.addEventListener('click', () => {
+      const [maker, model, year, detail, trim] = row.dataset.key.split('|||');
+      jumpToVehicle(maker, model, year, detail, trim);
+    });
+  });
+}
+
+function jumpToVehicle(maker, model, year, detail, trim) {
+  el('makerSel').value = maker;
+  onMakerChange();
+  el('modelSel').value = model;
+  onModelChange();
+  el('specSel').value = `${year}|||${detail}|||${trim}`;
+  onSpecChange();
+  el('trendChart').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function computeRankingTrend(company) {
+  const subset = DATA.series;
   const dayMap = {}; // day -> specKey -> insurer -> value
   subset.forEach(s => {
-    const specKey = `${s.year}|||${s.detail}|||${s.trim}`;
+    const specKey = `${s.maker}|||${s.model}|||${s.year}|||${s.detail}|||${s.trim}`;
     s.points.forEach(p => {
       const val = valueOf(p);
       if (val == null) return;
@@ -526,14 +660,12 @@ function computeRankingTrend(company, maker, model) {
 }
 
 function renderRanking() {
-  const maker = el('makerSel').value;
-  const model = el('modelSel').value;
   const company = el('rankCompanySel').value;
-  if (!maker || !model || !company) return;
+  if (!company) return;
 
-  el('rankScopeLine').textContent = `${maker} ${model} 전체 트림 기준 · ${metric === 'total' ? '총보험료(결제)' : 'CM보험료'} 낮은 순 랭킹`;
+  el('rankScopeLine').textContent = `전체 차종 대상 · ${metric === 'total' ? '총보험료(결제)' : 'CM보험료'} 낮은 순 랭킹`;
 
-  const trend = computeRankingTrend(company, maker, model).filter(t => t.total > 0);
+  const trend = computeRankingTrend(company).filter(t => t.total > 0);
   el('rankEmpty').style.display = trend.length === 0 ? 'block' : 'none';
 
   const latest = trend[trend.length - 1];
@@ -605,6 +737,9 @@ function wireStaticEvents() {
     el('tableToggle').textContent = tableVisible ? '표 숨기기' : '표로 보기';
     if (tableVisible) renderChart();
   });
+  el('moversAll').addEventListener('click', () => setMoversFilter('all'));
+  el('moversUp').addEventListener('click', () => setMoversFilter('up'));
+  el('moversDown').addEventListener('click', () => setMoversFilter('down'));
   el('themeBtn').addEventListener('click', () => {
     const root = document.documentElement;
     const cur = root.getAttribute('data-theme');
@@ -616,12 +751,22 @@ function wireStaticEvents() {
   });
 }
 
+function setMoversFilter(f) {
+  moversFilter = f;
+  el('moversAll').classList.toggle('active', f === 'all');
+  el('moversUp').classList.toggle('active', f === 'up');
+  el('moversDown').classList.toggle('active', f === 'down');
+  renderMovers();
+}
+
 function setMetric(m) {
   metric = m;
   el('metricTotal').classList.toggle('active', m === 'total');
   el('metricCm').classList.toggle('active', m === 'cm');
   renderChart();
   renderRanking();
+  renderHanwhaCompare();
+  renderMovers();
 }
 
 function setDisplayMode(m) {
