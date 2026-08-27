@@ -164,6 +164,42 @@
   .cmp-bad { color: var(--cmp-bad); }
   .mover-row { cursor: pointer; }
   .panel-sub { font-size: 12.5px; color: var(--text-muted); margin: -4px 0 12px; }
+
+  /* ── 탭 네비게이션 ── */
+  .tab-nav {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin: 4px 0 18px;
+  }
+  .tab-nav-btn {
+    background: none;
+    border: none;
+    border-bottom: 2.5px solid transparent;
+    padding: 10px 20px;
+    font-family: inherit;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    cursor: pointer;
+    margin-bottom: -1px;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .tab-nav-btn.active { color: var(--text-primary); border-bottom-color: var(--text-primary); }
+  .tab-nav-btn:hover:not(.active) { color: var(--text-secondary); }
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
+
+  /* ── 날짜별 보험료 탭 ── */
+  .date-chart-wrap { position: relative; height: 400px; margin: 4px 0 8px; }
+  .date-insurer-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+  .date-change-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
+  .date-change-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
+  .date-change-item .ci-date { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
+  .date-change-item .ci-deltas { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12.5px; }
+  .ci-up   { color: var(--delta-up); }
+  .ci-down { color: var(--delta-down); }
+  .empty-note { color: var(--text-muted); font-size: 13px; padding: 16px 0; }
 </style>
 </head>
 <body>
@@ -175,6 +211,13 @@
     </div>
     <button class="theme-btn" id="themeBtn">다크 모드</button>
   </header>
+
+  <nav class="tab-nav" role="tablist">
+    <button class="tab-nav-btn active" role="tab" data-tab="vehicle" aria-selected="true">차종별 추이</button>
+    <button class="tab-nav-btn" role="tab" data-tab="bydate" aria-selected="false">날짜별 보험료</button>
+  </nav>
+
+  <div id="tab-vehicle" class="tab-pane active">
 
   <div class="panel">
     <div class="filters">
@@ -254,6 +297,31 @@
     <div class="chart-box" style="height: 280px;"><canvas id="rankChart"></canvas></div>
     <div class="empty-state" id="rankEmpty" style="display:none;">해당 차종에 순위를 매길 표본(같은 날 2개 이상 보험사 견적)이 아직 없습니다.</div>
   </div>
+
+  </div><!-- /tab-vehicle -->
+
+  <div id="tab-bydate" class="tab-pane">
+
+    <div class="panel">
+      <h2>CM보험료 — 보험시작일별 추이</h2>
+      <p class="panel-sub">차량번호 기준 · 보험 시작 날짜에 따라 보험료가 어떻게 달라지는지 보여줍니다.</p>
+      <div class="date-insurer-row" id="dateInsurerRow"></div>
+      <div class="date-chart-wrap"><canvas id="dateChart"></canvas></div>
+      <div class="meta" id="dateMeta" style="margin-top:6px;"></div>
+    </div>
+
+    <div class="panel">
+      <h2>변동일 요약 <span class="meta" style="font-size:12px;font-weight:400;">0.5% 이상 변화</span></h2>
+      <div id="dateChangeBody"><p class="empty-note">로딩 중…</p></div>
+    </div>
+
+    <div class="panel">
+      <button class="table-toggle" id="dateTableToggle">표로 보기</button>
+      <div class="scroll-x" id="dateTableWrap" style="display:none;"></div>
+    </div>
+
+  </div><!-- /tab-bydate -->
+
 </div>
 
 <script>
@@ -777,6 +845,258 @@ function setDisplayMode(m) {
 }
 
 boot();
+
+// ── 탭 전환 ──
+(function () {
+  const btns = document.querySelectorAll('.tab-nav-btn');
+  let dateInited = false;
+  btns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tab = btn.dataset.tab;
+      btns.forEach(b => {
+        b.classList.toggle('active', b === btn);
+        b.setAttribute('aria-selected', b === btn ? 'true' : 'false');
+      });
+      document.querySelectorAll('.tab-pane').forEach(p => {
+        p.classList.toggle('active', p.id === 'tab-' + tab);
+      });
+      if (tab === 'bydate' && !dateInited) {
+        dateInited = true;
+        initDateTab();
+      }
+    });
+  });
+})();
+
+// ── 날짜별 보험료 탭 ──
+const DATE_INSURER_ORDER = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','롯데손해보험','흥국화재','하나손해보험','한화손보','AXA'];
+
+function parseDateCsv(text) {
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
+  const lines = text.trim().split(/\r?\n/);
+  if (lines.length < 2) return [];
+  return lines.slice(1).map(l => l.split(',').map(s => s.trim()));
+}
+
+function parsePriceStr(s) {
+  const n = parseInt(String(s || '').replace(/[,\s"]/g, ''));
+  return isNaN(n) ? null : n;
+}
+
+function buildDateLookup(rows) {
+  // indices: 1=실행시각, 3=보험시작일, 5=보험사, 6=CM보험료
+  const lookup = {};
+  rows.forEach(r => {
+    const date = r[3], co = r[5], time = r[1];
+    if (!date || !co) return;
+    if (!lookup[date]) lookup[date] = {};
+    const ex = lookup[date][co];
+    if (!ex || time > ex.time) lookup[date][co] = { cm: parsePriceStr(r[6]), time };
+  });
+  return lookup;
+}
+
+function computeDateChanges(dates, companies, lookup) {
+  const changes = {};
+  dates.forEach((date, i) => {
+    if (i === 0) return;
+    const prev = dates[i - 1];
+    changes[date] = {};
+    companies.forEach(co => {
+      const cur  = lookup[date]?.[co]?.cm;
+      const prevV = lookup[prev]?.[co]?.cm;
+      if (cur != null && prevV != null && prevV !== 0) {
+        const pct = (cur - prevV) / prevV * 100;
+        if (Math.abs(pct) >= 0.5) changes[date][co] = { pct, abs: cur - prevV };
+      }
+    });
+  });
+  return changes;
+}
+
+let dateChart = null;
+let dateSelectedInsurers = new Set();
+let dateTableVisible = false;
+
+async function initDateTab() {
+  const metaEl       = el('dateMeta');
+  const insurerRowEl = el('dateInsurerRow');
+  const changeEl     = el('dateChangeBody');
+  metaEl.textContent = '불러오는 중…';
+
+  let rows = [];
+  try {
+    const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
+    if (res.ok) rows = parseDateCsv(await res.text());
+  } catch (e) {}
+
+  if (!rows.length) {
+    metaEl.textContent = '데이터 없음';
+    changeEl.innerHTML = '<p class="empty-note">quotes_by_date.csv 파일이 없습니다.</p>';
+    return;
+  }
+
+  const lookup = buildDateLookup(rows);
+  const dates  = Object.keys(lookup).sort();
+
+  const coSet = new Set();
+  dates.forEach(d => Object.keys(lookup[d]).forEach(co => coSet.add(co)));
+  const companies = DATE_INSURER_ORDER.filter(co => coSet.has(co));
+  coSet.forEach(co => { if (!companies.includes(co)) companies.push(co); });
+  dateSelectedInsurers = new Set(companies);
+
+  const latestTime = rows.map(r => r[1]).filter(Boolean).sort().pop();
+  if (latestTime) {
+    const m = latestTime.match(/(\d{4})-(\d{2})-(\d{2})\s+(\d{2}):(\d{2})/);
+    metaEl.textContent = m ? `최종 업데이트: ${m[2]}/${m[3]} ${m[4]}:${m[5]}` : latestTime;
+  }
+
+  const changes = computeDateChanges(dates, companies, lookup);
+
+  function renderDateInsurers() {
+    insurerRowEl.innerHTML = companies.map(co => {
+      const colorVar = insurerColorVar(co);
+      const active   = dateSelectedInsurers.has(co);
+      return `<span class="chip ${active ? 'active' : ''}" data-co="${escapeHtml(co)}">
+        <span class="dot" style="background:var(${colorVar})"></span>${escapeHtml(co)}
+      </span>`;
+    }).join('');
+    [...insurerRowEl.querySelectorAll('.chip')].forEach(chip => {
+      chip.addEventListener('click', () => {
+        const co = chip.dataset.co;
+        dateSelectedInsurers.has(co) ? dateSelectedInsurers.delete(co) : dateSelectedInsurers.add(co);
+        renderDateInsurers();
+        renderDateChart();
+      });
+    });
+  }
+
+  function renderDateChart() {
+    const ctx = el('dateChart').getContext('2d');
+    const active = companies.filter(co => dateSelectedInsurers.has(co));
+    const datasets = active.map(co => {
+      const color = cssVar(insurerColorVar(co));
+      const data  = dates.map(d => lookup[d]?.[co]?.cm ?? null);
+      return {
+        label: co,
+        data,
+        borderColor: color,
+        backgroundColor: color,
+        spanGaps: true,
+        borderWidth: 2,
+        borderDash: insurerDash(co),
+        pointStyle: insurerPointStyle(co),
+        pointRadius: 3,
+        pointHoverRadius: 5,
+        tension: 0.1,
+      };
+    });
+
+    const changedDates = new Set(
+      Object.entries(changes).filter(([, c]) => Object.keys(c).length > 0).map(([d]) => d)
+    );
+
+    if (dateChart) dateChart.destroy();
+    dateChart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: dates, datasets },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: {
+            position: 'bottom',
+            labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true },
+          },
+          tooltip: {
+            backgroundColor: cssVar('--surface-1'),
+            titleColor: cssVar('--text-primary'),
+            bodyColor: cssVar('--text-secondary'),
+            borderColor: cssVar('--border'),
+            borderWidth: 1,
+            callbacks: {
+              label: (item) => `${item.dataset.label}: ${fmtWon(item.parsed.y)}`,
+              afterLabel: (item) => {
+                const date = dates[item.dataIndex];
+                const co   = item.dataset.label;
+                const ch   = changes[date]?.[co];
+                if (!ch) return '';
+                const sign = ch.abs > 0 ? '+' : '';
+                return `  ${sign}${ch.abs.toLocaleString('ko-KR')}원 (${sign}${ch.pct.toFixed(1)}%)`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { color: cssVar('--grid-line') },
+            ticks: {
+              color: (ctx) => {
+                const label = dates[ctx.index];
+                return changedDates.has(label) ? cssVar('--delta-up') : cssVar('--text-muted');
+              },
+              maxRotation: 45,
+              autoSkip: true,
+              maxTicksLimit: 12,
+            },
+          },
+          y: {
+            grid: { color: cssVar('--grid-line') },
+            ticks: {
+              color: cssVar('--text-muted'),
+              callback: (v) => `${Math.round(v / 10000)}만`,
+            },
+            border: { color: cssVar('--axis-line') },
+          },
+        },
+      },
+    });
+  }
+
+  function renderDateChanges() {
+    const items = dates.filter(d => changes[d] && Object.keys(changes[d]).length > 0).map(d => {
+      const deltas = Object.entries(changes[d]).map(([co, { pct, abs }]) => {
+        const up   = abs > 0;
+        const cls  = up ? 'ci-up' : 'ci-down';
+        const sign = up ? '▲' : '▼';
+        return `<span class="${cls}">${escapeHtml(co)} ${sign}${Math.abs(Math.round(abs / 1000))}천(${Math.abs(pct).toFixed(1)}%)</span>`;
+      }).join('');
+      return `<div class="date-change-item"><div class="ci-date">${d}</div><div class="ci-deltas">${deltas}</div></div>`;
+    });
+    changeEl.innerHTML = items.length
+      ? `<div class="date-change-list">${items.join('')}</div>`
+      : `<p class="empty-note">변동이 감지된 날짜 없음 (기준: 0.5% 이상)</p>`;
+  }
+
+  function renderDateTable() {
+    if (!dateTableVisible) return;
+    let html = '<table><thead><tr><th>보험시작일</th>';
+    companies.forEach(co => { html += `<th>${escapeHtml(co)}</th>`; });
+    html += '</tr></thead><tbody>';
+    dates.forEach(d => {
+      html += `<tr><td style="text-align:left">${d}</td>`;
+      companies.forEach(co => {
+        const v = lookup[d]?.[co]?.cm;
+        html += `<td>${v != null ? fmtWon(v) : '-'}</td>`;
+      });
+      html += '</tr>';
+    });
+    html += '</tbody></table>';
+    el('dateTableWrap').innerHTML = html;
+  }
+
+  renderDateInsurers();
+  renderDateChart();
+  renderDateChanges();
+
+  el('dateTableToggle').addEventListener('click', () => {
+    dateTableVisible = !dateTableVisible;
+    el('dateTableWrap').style.display = dateTableVisible ? 'block' : 'none';
+    el('dateTableToggle').textContent  = dateTableVisible ? '표 숨기기' : '표로 보기';
+    renderDateTable();
+  });
+}
 </script>
 </body>
 </html>
