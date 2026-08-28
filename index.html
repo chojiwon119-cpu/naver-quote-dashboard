@@ -987,6 +987,62 @@ async function initDateTab() {
     });
   }
 
+  // 변화 지점에 +X% / -X% 라벨을 차트 위에 직접 그리는 플러그인
+  const changeAnnotPlugin = {
+    id: 'changeAnnot',
+    afterDatasetsDraw(chart) {
+      const { ctx } = chart;
+      ctx.save();
+      ctx.font = 'bold 9.5px system-ui, -apple-system, sans-serif';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+
+      chart.data.datasets.forEach((ds, dsIdx) => {
+        if (!chart.isDatasetVisible(dsIdx)) return;
+        const meta = chart.getDatasetMeta(dsIdx);
+
+        ds.data.forEach((val, i) => {
+          if (val == null || i === 0) return;
+          // 이전 non-null 값 찾기
+          let prevVal = null;
+          for (let j = i - 1; j >= 0; j--) {
+            if (ds.data[j] != null) { prevVal = ds.data[j]; break; }
+          }
+          if (prevVal == null || prevVal === 0) return;
+
+          const pct = (val - prevVal) / prevVal * 100;
+          if (Math.abs(pct) < 0.1) return; // 0.1% 미만은 무시
+
+          const pt = meta.data[i];
+          if (!pt) return;
+
+          const isUp  = pct > 0;
+          const label = `${isUp ? '+' : ''}${pct.toFixed(1)}%`;
+          const color = isUp ? cssVar('--delta-up') : cssVar('--delta-down');
+          const yOff  = isUp ? -16 : 16;
+          const x = pt.x, y = pt.y + yOff;
+
+          // 배경 pill
+          const tw = ctx.measureText(label).width;
+          const pw = tw + 8, ph = 14;
+          ctx.fillStyle = isUp ? 'rgba(227,73,72,0.15)' : 'rgba(42,120,214,0.15)';
+          ctx.beginPath();
+          if (ctx.roundRect) {
+            ctx.roundRect(x - pw / 2, y - ph / 2, pw, ph, 3);
+          } else {
+            ctx.rect(x - pw / 2, y - ph / 2, pw, ph);
+          }
+          ctx.fill();
+
+          ctx.fillStyle = color;
+          ctx.fillText(label, x, y);
+        });
+      });
+
+      ctx.restore();
+    },
+  };
+
   function renderDateChart() {
     const ctx = el('dateChart').getContext('2d');
     const active = companies.filter(co => dateSelectedInsurers.has(co));
@@ -1016,6 +1072,7 @@ async function initDateTab() {
     dateChart = new Chart(ctx, {
       type: 'line',
       data: { labels: dates, datasets },
+      plugins: [changeAnnotPlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
