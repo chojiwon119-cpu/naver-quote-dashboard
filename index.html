@@ -331,6 +331,16 @@
       <div class="date-insurer-row" id="dateVehicleRow"></div>
 
       <div class="filter-head" style="margin-top:10px;">
+        <label style="margin:0;">세그먼트 (나이·성별)</label>
+        <div class="bulk-btns">
+          <button class="bulk-btn" id="dateSegmentAllBtn">전체선택</button>
+          <button class="bulk-btn" id="dateSegmentNoneBtn">전체삭제</button>
+        </div>
+      </div>
+      <div class="date-insurer-row" id="dateSegmentRow"></div>
+      <div class="cap-note">아이디별로 직접 입력해둔 나이·성별을 그대로 보여줍니다(자동 추정 아님) · "미지정"은 아이디 태깅 없이 실행된 데이터입니다.</div>
+
+      <div class="filter-head" style="margin-top:10px;">
         <label style="margin:0;">보험사</label>
         <div class="bulk-btns">
           <button class="bulk-btn" id="dateInsurerAllBtn">전체선택</button>
@@ -960,21 +970,37 @@ function vehicleLabelOf(r) {
   return r[2] || '기타';
 }
 
+function segmentKeyOf(r) {
+  // indices: 16=나이, 17=성별 — 아이디별로 직접 입력해둔 값, 자동 추정 없음
+  const age = (r[16] || '').trim(), gender = (r[17] || '').trim();
+  if (!age && !gender) return 'unset';
+  return `${age}|||${gender}`;
+}
+function segmentLabelOf(r) {
+  const age = (r[16] || '').trim(), gender = (r[17] || '').trim();
+  if (!age && !gender) return '미지정';
+  return [age ? `${age}세` : '', gender].filter(Boolean).join(' ');
+}
+
 function buildDateLookup(rows) {
   // indices: 1=실행시각, 3=보험시작일, 5=보험사, 6=CM보험료, 7=총보험료(결제)
-  const lookup = {};       // vehicleKey -> date -> co -> {total, cm, time}
+  const lookup = {};       // vehicleKey -> segmentKey -> date -> co -> {total, cm, time}
   const vehicleLabels = {};
+  const segmentLabels = {};
   rows.forEach(r => {
     const date = r[3], co = r[5], time = r[1];
     if (!date || !co) return;
     const vKey = vehicleKeyOf(r);
+    const sKey = segmentKeyOf(r);
     vehicleLabels[vKey] = vehicleLabelOf(r);
+    segmentLabels[sKey] = segmentLabelOf(r);
     if (!lookup[vKey]) lookup[vKey] = {};
-    if (!lookup[vKey][date]) lookup[vKey][date] = {};
-    const ex = lookup[vKey][date][co];
-    if (!ex || time > ex.time) lookup[vKey][date][co] = { total: parsePriceStr(r[7]), cm: parsePriceStr(r[6]), time };
+    if (!lookup[vKey][sKey]) lookup[vKey][sKey] = {};
+    if (!lookup[vKey][sKey][date]) lookup[vKey][sKey][date] = {};
+    const ex = lookup[vKey][sKey][date][co];
+    if (!ex || time > ex.time) lookup[vKey][sKey][date][co] = { total: parsePriceStr(r[7]), cm: parsePriceStr(r[6]), time };
   });
-  return { lookup, vehicleLabels };
+  return { lookup, vehicleLabels, segmentLabels };
 }
 
 function computeDateChanges(dates, companies, lookup) {
@@ -998,14 +1024,16 @@ function computeDateChanges(dates, companies, lookup) {
 let dateChart = null;
 let dateSelectedInsurers = new Set();
 let dateSelectedVehicles = new Set();
+let dateSelectedSegments = new Set();
 let dateTableVisible = false;
 
 async function initDateTab() {
-  const metaEl       = el('dateMeta');
-  const insurerRowEl = el('dateInsurerRow');
-  const vehicleRowEl = el('dateVehicleRow');
-  const changeEl     = el('dateChangeBody');
-  const capNoteEl    = el('dateCapNote');
+  const metaEl        = el('dateMeta');
+  const insurerRowEl  = el('dateInsurerRow');
+  const vehicleRowEl  = el('dateVehicleRow');
+  const segmentRowEl  = el('dateSegmentRow');
+  const changeEl      = el('dateChangeBody');
+  const capNoteEl     = el('dateCapNote');
   metaEl.textContent = '불러오는 중…';
 
   let rows = [];
@@ -1020,9 +1048,15 @@ async function initDateTab() {
     return;
   }
 
-  const { lookup, vehicleLabels } = buildDateLookup(rows);
+  const { lookup, vehicleLabels, segmentLabels } = buildDateLookup(rows);
   const vehicleKeys = Object.keys(vehicleLabels).sort((a, b) => vehicleLabels[a].localeCompare(vehicleLabels[b], 'ko'));
+  const segmentKeys = Object.keys(segmentLabels).sort((a, b) => {
+    if (a === 'unset') return 1;
+    if (b === 'unset') return -1;
+    return segmentLabels[a].localeCompare(segmentLabels[b], 'ko');
+  });
   dateSelectedVehicles = new Set(vehicleKeys);
+  dateSelectedSegments = new Set(segmentKeys);
 
   const dates = uniq(rows.map(r => r[3]).filter(Boolean)).sort();
 
@@ -1039,10 +1073,11 @@ async function initDateTab() {
   }
 
   function currentChanges() {
-    // 변동 요약/툴팁은 차종 1개가 선택돼 있을 때만 의미가 있음
-    if (dateSelectedVehicles.size !== 1) return {};
+    // 변동 요약/툴팁은 차종·세그먼트가 각각 1개씩 선택돼 있을 때만 의미가 있음
+    if (dateSelectedVehicles.size !== 1 || dateSelectedSegments.size !== 1) return {};
     const vKey = [...dateSelectedVehicles][0];
-    return computeDateChanges(dates, companies, lookup[vKey] || {});
+    const sKey = [...dateSelectedSegments][0];
+    return computeDateChanges(dates, companies, lookup[vKey]?.[sKey] || {});
   }
 
   function renderDateVehicles() {
@@ -1055,6 +1090,23 @@ async function initDateTab() {
         const vKey = chip.dataset.vkey;
         dateSelectedVehicles.has(vKey) ? dateSelectedVehicles.delete(vKey) : dateSelectedVehicles.add(vKey);
         renderDateVehicles();
+        renderDateChart();
+        renderDateChanges();
+        renderDateTable();
+      });
+    });
+  }
+
+  function renderDateSegments() {
+    segmentRowEl.innerHTML = segmentKeys.map(sKey => {
+      const active = dateSelectedSegments.has(sKey);
+      return `<span class="chip ${active ? 'active' : ''}" data-skey="${escapeHtml(sKey)}">${escapeHtml(segmentLabels[sKey])}</span>`;
+    }).join('');
+    [...segmentRowEl.querySelectorAll('.chip')].forEach(chip => {
+      chip.addEventListener('click', () => {
+        const sKey = chip.dataset.skey;
+        dateSelectedSegments.has(sKey) ? dateSelectedSegments.delete(sKey) : dateSelectedSegments.add(sKey);
+        renderDateSegments();
         renderDateChart();
         renderDateChanges();
         renderDateTable();
@@ -1141,35 +1193,45 @@ async function initDateTab() {
   function renderDateChart() {
     const ctx = el('dateChart').getContext('2d');
     const activeVehicles = vehicleKeys.filter(v => dateSelectedVehicles.has(v));
+    const activeSegments = segmentKeys.filter(s => dateSelectedSegments.has(s));
     const activeCos = companies.filter(co => dateSelectedInsurers.has(co));
     const multiVehicle = activeVehicles.length > 1;
+    const multiSegment = activeSegments.length > 1;
+    const multiGroup = multiVehicle || multiSegment;
     const changes = currentChanges();
 
     const datasets = [];
     activeVehicles.forEach((vKey, vIdx) => {
-      activeCos.forEach(co => {
-        const data = dates.map(d => lookup[vKey]?.[d]?.[co]?.total ?? null);
-        if (data.every(v => v == null)) return;
-        const color = cssVar(insurerColorVar(co));
-        datasets.push({
-          label: multiVehicle ? `${vehicleLabels[vKey]} · ${co}` : co,
-          _vKey: vKey, _co: co,
-          data,
-          borderColor: color,
-          backgroundColor: color,
-          spanGaps: true,
-          borderWidth: 2,
-          borderDash: multiVehicle ? DASH_PATTERNS[vIdx % DASH_PATTERNS.length] : insurerDash(co),
-          pointStyle: insurerPointStyle(co),
-          pointRadius: 3,
-          pointHoverRadius: 5,
-          tension: 0.1,
+      activeSegments.forEach((sKey, sIdx) => {
+        activeCos.forEach(co => {
+          const data = dates.map(d => lookup[vKey]?.[sKey]?.[d]?.[co]?.total ?? null);
+          if (data.every(v => v == null)) return;
+          const color = cssVar(insurerColorVar(co));
+          const labelParts = [];
+          if (multiVehicle) labelParts.push(vehicleLabels[vKey]);
+          if (multiSegment) labelParts.push(segmentLabels[sKey]);
+          labelParts.push(co);
+          const dashIdx = vIdx * activeSegments.length + sIdx;
+          datasets.push({
+            label: labelParts.join(' · '),
+            _vKey: vKey, _sKey: sKey, _co: co,
+            data,
+            borderColor: color,
+            backgroundColor: color,
+            spanGaps: true,
+            borderWidth: 2,
+            borderDash: multiGroup ? DASH_PATTERNS[dashIdx % DASH_PATTERNS.length] : insurerDash(co),
+            pointStyle: insurerPointStyle(co),
+            pointRadius: 3,
+            pointHoverRadius: 5,
+            tension: 0.1,
+          });
         });
       });
     });
 
-    capNoteEl.textContent = multiVehicle
-      ? '차종을 여러 개 선택하면 "차종 · 보험사"로 선을 구분합니다(점선 스타일 = 차종). 선이 많아지면 차종 또는 보험사를 줄여서 보세요. 변동일 요약은 차종 1개를 선택했을 때만 표시됩니다.'
+    capNoteEl.textContent = multiGroup
+      ? '차종·세그먼트를 여러 개 선택하면 "차종 · 세그먼트 · 보험사"로 선을 구분합니다(점선 스타일로 구분). 선이 많아지면 필터를 줄여서 보세요. 변동일 요약은 차종·세그먼트를 각각 1개씩 선택했을 때만 표시됩니다.'
       : '';
 
     const changedDates = new Set(
@@ -1236,8 +1298,8 @@ async function initDateTab() {
   }
 
   function renderDateChanges() {
-    if (dateSelectedVehicles.size !== 1) {
-      changeEl.innerHTML = '<p class="empty-note">차종을 1개만 선택하면 변동일 요약을 볼 수 있습니다.</p>';
+    if (dateSelectedVehicles.size !== 1 || dateSelectedSegments.size !== 1) {
+      changeEl.innerHTML = '<p class="empty-note">차종·세그먼트를 각각 1개씩 선택하면 변동일 요약을 볼 수 있습니다.</p>';
       return;
     }
     const changes = currentChanges();
@@ -1258,20 +1320,23 @@ async function initDateTab() {
   function renderDateTable() {
     if (!dateTableVisible) return;
     const activeVehicles = vehicleKeys.filter(v => dateSelectedVehicles.has(v));
+    const activeSegments = segmentKeys.filter(s => dateSelectedSegments.has(s));
     const activeCos = companies.filter(co => dateSelectedInsurers.has(co));
-    let html = '<table><thead><tr><th>차종</th><th>보험시작일</th>';
+    let html = '<table><thead><tr><th>차종</th><th>세그먼트</th><th>보험시작일</th>';
     activeCos.forEach(co => { html += `<th>${escapeHtml(co)}</th>`; });
     html += '</tr></thead><tbody>';
     activeVehicles.forEach(vKey => {
-      dates.forEach(d => {
-        const rowHasData = activeCos.some(co => lookup[vKey]?.[d]?.[co]);
-        if (!rowHasData) return;
-        html += `<tr><td style="text-align:left">${escapeHtml(vehicleLabels[vKey])}</td><td style="text-align:left">${d}</td>`;
-        activeCos.forEach(co => {
-          const v = lookup[vKey]?.[d]?.[co]?.cm;
-          html += `<td>${v != null ? fmtWon(v) : '-'}</td>`;
+      activeSegments.forEach(sKey => {
+        dates.forEach(d => {
+          const rowHasData = activeCos.some(co => lookup[vKey]?.[sKey]?.[d]?.[co]);
+          if (!rowHasData) return;
+          html += `<tr><td style="text-align:left">${escapeHtml(vehicleLabels[vKey])}</td><td style="text-align:left">${escapeHtml(segmentLabels[sKey])}</td><td style="text-align:left">${d}</td>`;
+          activeCos.forEach(co => {
+            const v = lookup[vKey]?.[sKey]?.[d]?.[co]?.cm;
+            html += `<td>${v != null ? fmtWon(v) : '-'}</td>`;
+          });
+          html += '</tr>';
         });
-        html += '</tr>';
       });
     });
     html += '</tbody></table>';
@@ -1279,6 +1344,7 @@ async function initDateTab() {
   }
 
   renderDateVehicles();
+  renderDateSegments();
   renderDateInsurers();
   renderDateChart();
   renderDateChanges();
@@ -1290,6 +1356,14 @@ async function initDateTab() {
   el('dateVehicleNoneBtn').addEventListener('click', () => {
     dateSelectedVehicles = new Set();
     renderDateVehicles(); renderDateChart(); renderDateChanges(); renderDateTable();
+  });
+  el('dateSegmentAllBtn').addEventListener('click', () => {
+    dateSelectedSegments = new Set(segmentKeys);
+    renderDateSegments(); renderDateChart(); renderDateChanges(); renderDateTable();
+  });
+  el('dateSegmentNoneBtn').addEventListener('click', () => {
+    dateSelectedSegments = new Set();
+    renderDateSegments(); renderDateChart(); renderDateChanges(); renderDateTable();
   });
   el('dateInsurerAllBtn').addEventListener('click', () => {
     dateSelectedInsurers = new Set(companies);
