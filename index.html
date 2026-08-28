@@ -201,6 +201,12 @@
   /* ── 날짜별 보험료 탭 ── */
   .date-chart-wrap { position: relative; height: 400px; margin: 4px 0 8px; }
   .date-insurer-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 14px; }
+  .date-range-row { display: flex; align-items: center; gap: 8px; margin: 4px 0 4px; }
+  .date-range-row select {
+    padding: 6px 9px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--chip-bg); color: var(--text-primary); font-size: 12.5px;
+  }
+  .date-range-sep { color: var(--text-muted); font-size: 12.5px; }
   .date-change-list { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
   .date-change-item { border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; }
   .date-change-item .ci-date { font-size: 12px; font-weight: 600; color: var(--text-muted); margin-bottom: 6px; }
@@ -349,6 +355,28 @@
       </div>
       <div class="date-insurer-row" id="dateInsurerRow"></div>
       <div class="cap-note" id="dateCapNote"></div>
+
+      <div class="filter-head" style="margin-top:10px;">
+        <label style="margin:0;">기간</label>
+        <div class="bulk-btns">
+          <button class="bulk-btn active" id="dateRangeAllBtn">전체</button>
+          <button class="bulk-btn" id="dateRangeFirst5Btn">앞 5개</button>
+          <button class="bulk-btn" id="dateRangeFirst10Btn">앞 10개</button>
+        </div>
+      </div>
+      <div class="date-range-row">
+        <select id="dateRangeFrom"></select>
+        <span class="date-range-sep">~</span>
+        <select id="dateRangeTo"></select>
+      </div>
+
+      <div class="filter-head" style="margin-top:10px;">
+        <label style="margin:0;">표시 방식</label>
+        <div class="metric-toggle">
+          <button id="dateModeAmount" class="active">금액</button>
+          <button id="dateModePercent">변동률(%)</button>
+        </div>
+      </div>
 
       <div class="date-chart-wrap"><canvas id="dateChart"></canvas></div>
       <div class="meta" id="dateMeta" style="margin-top:6px;"></div>
@@ -1026,6 +1054,9 @@ let dateSelectedInsurers = new Set();
 let dateSelectedVehicles = new Set();
 let dateSelectedSegments = new Set();
 let dateTableVisible = false;
+let dateRangeFrom = null;
+let dateRangeTo = null;
+let dateDisplayMode = 'amount'; // 'amount' | 'percent'
 
 async function initDateTab() {
   const metaEl        = el('dateMeta');
@@ -1059,6 +1090,31 @@ async function initDateTab() {
   dateSelectedSegments = new Set(segmentKeys);
 
   const dates = uniq(rows.map(r => r[3]).filter(Boolean)).sort();
+  dateRangeFrom = dates[0];
+  dateRangeTo = dates[dates.length - 1];
+
+  const fromSelEl = el('dateRangeFrom');
+  const toSelEl   = el('dateRangeTo');
+  function populateRangeSelects() {
+    const opts = dates.map(d => `<option value="${d}">${d}</option>`).join('');
+    fromSelEl.innerHTML = opts;
+    toSelEl.innerHTML = opts;
+    fromSelEl.value = dateRangeFrom;
+    toSelEl.value = dateRangeTo;
+  }
+  function setDateRange(from, to, activeBtnId) {
+    dateRangeFrom = from;
+    dateRangeTo = to;
+    fromSelEl.value = from;
+    toSelEl.value = to;
+    [...el('dateVehicleRow').closest('.panel').querySelectorAll('.bulk-btns .bulk-btn')]
+      .forEach(b => { if (['dateRangeAllBtn','dateRangeFirst5Btn','dateRangeFirst10Btn'].includes(b.id)) b.classList.toggle('active', b.id === activeBtnId); });
+    renderDateChart(); renderDateChanges(); renderDateTable();
+  }
+  function visibleDates() {
+    return dates.filter(d => d >= dateRangeFrom && d <= dateRangeTo);
+  }
+  populateRangeSelects();
 
   const coSet = new Set();
   rows.forEach(r => { if (r[5]) coSet.add(r[5]); });
@@ -1192,20 +1248,26 @@ async function initDateTab() {
 
   function renderDateChart() {
     const ctx = el('dateChart').getContext('2d');
+    const vDates = visibleDates();
     const activeVehicles = vehicleKeys.filter(v => dateSelectedVehicles.has(v));
     const activeSegments = segmentKeys.filter(s => dateSelectedSegments.has(s));
     const activeCos = companies.filter(co => dateSelectedInsurers.has(co));
     const multiVehicle = activeVehicles.length > 1;
     const multiSegment = activeSegments.length > 1;
     const multiGroup = multiVehicle || multiSegment;
+    const isPct = dateDisplayMode === 'percent';
     const changes = currentChanges();
 
     const datasets = [];
     activeVehicles.forEach((vKey, vIdx) => {
       activeSegments.forEach((sKey, sIdx) => {
         activeCos.forEach(co => {
-          const data = dates.map(d => lookup[vKey]?.[sKey]?.[d]?.[co]?.total ?? null);
-          if (data.every(v => v == null)) return;
+          const raw = vDates.map(d => lookup[vKey]?.[sKey]?.[d]?.[co]?.total ?? null);
+          if (raw.every(v => v == null)) return;
+          const baseline = raw.find(v => v != null);
+          const data = isPct
+            ? raw.map(v => (v == null || !baseline) ? null : ((v - baseline) / baseline) * 100)
+            : raw;
           const color = cssVar(insurerColorVar(co));
           const labelParts = [];
           if (multiVehicle) labelParts.push(vehicleLabels[vKey]);
@@ -1231,18 +1293,37 @@ async function initDateTab() {
     });
 
     capNoteEl.textContent = multiGroup
-      ? '차종·세그먼트를 여러 개 선택하면 "차종 · 세그먼트 · 보험사"로 선을 구분합니다(점선 스타일로 구분). 선이 많아지면 필터를 줄여서 보세요. 변동일 요약은 차종·세그먼트를 각각 1개씩 선택했을 때만 표시됩니다.'
+      ? '차종·세그먼트를 여러 개 선택하면 "차종 · 세그먼트 · 보험사"로 선을 구분합니다(점선 스타일로 구분). 선이 많아지면 필터·기간을 줄여서 보세요. 변동일 요약은 차종·세그먼트를 각각 1개씩 선택했을 때만 표시됩니다.'
       : '';
 
     const changedDates = new Set(
       Object.entries(changes).filter(([, c]) => Object.keys(c).length > 0).map(([d]) => d)
     );
 
+    const crosshairPlugin = {
+      id: 'crosshair',
+      afterDraw(c) {
+        const active = c.tooltip?.getActiveElements ? c.tooltip.getActiveElements() : [];
+        if (!active || !active.length) return;
+        const x = active[0].element.x;
+        const { top, bottom } = c.chartArea;
+        const cctx = c.ctx;
+        cctx.save();
+        cctx.beginPath();
+        cctx.moveTo(x, top);
+        cctx.lineTo(x, bottom);
+        cctx.lineWidth = 1;
+        cctx.strokeStyle = cssVar('--border');
+        cctx.stroke();
+        cctx.restore();
+      },
+    };
+
     if (dateChart) dateChart.destroy();
     dateChart = new Chart(ctx, {
       type: 'line',
-      data: { labels: dates, datasets },
-      plugins: [changeAnnotPlugin],
+      data: { labels: vDates, datasets },
+      plugins: [changeAnnotPlugin, crosshairPlugin],
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -1259,9 +1340,10 @@ async function initDateTab() {
             borderColor: cssVar('--border'),
             borderWidth: 1,
             callbacks: {
-              label: (item) => `${item.dataset.label}: ${fmtWon(item.parsed.y)}`,
+              label: (item) => `${item.dataset.label}: ${isPct ? fmtPct(item.parsed.y) : fmtWon(item.parsed.y)}`,
               afterLabel: (item) => {
-                const date = dates[item.dataIndex];
+                if (isPct) return '';
+                const date = vDates[item.dataIndex];
                 const co   = item.dataset._co;
                 const ch   = changes[date]?.[co];
                 if (!ch) return '';
@@ -1276,7 +1358,7 @@ async function initDateTab() {
             grid: { color: cssVar('--grid-line') },
             ticks: {
               color: (ctx) => {
-                const label = dates[ctx.index];
+                const label = vDates[ctx.index];
                 return changedDates.has(label) ? cssVar('--delta-up') : cssVar('--text-muted');
               },
               maxRotation: 45,
@@ -1288,7 +1370,7 @@ async function initDateTab() {
             grid: { color: cssVar('--grid-line') },
             ticks: {
               color: cssVar('--text-muted'),
-              callback: (v) => `${Math.round(v / 10000)}만`,
+              callback: (v) => isPct ? `${v.toFixed(0)}%` : `${Math.round(v / 10000)}만`,
             },
             border: { color: cssVar('--axis-line') },
           },
@@ -1303,7 +1385,7 @@ async function initDateTab() {
       return;
     }
     const changes = currentChanges();
-    const items = dates.filter(d => changes[d] && Object.keys(changes[d]).length > 0).map(d => {
+    const items = visibleDates().filter(d => changes[d] && Object.keys(changes[d]).length > 0).map(d => {
       const deltas = Object.entries(changes[d]).map(([co, { pct, abs }]) => {
         const up   = abs > 0;
         const cls  = up ? 'ci-up' : 'ci-down';
@@ -1327,7 +1409,7 @@ async function initDateTab() {
     html += '</tr></thead><tbody>';
     activeVehicles.forEach(vKey => {
       activeSegments.forEach(sKey => {
-        dates.forEach(d => {
+        visibleDates().forEach(d => {
           const rowHasData = activeCos.some(co => lookup[vKey]?.[sKey]?.[d]?.[co]);
           if (!rowHasData) return;
           html += `<tr><td style="text-align:left">${escapeHtml(vehicleLabels[vKey])}</td><td style="text-align:left">${escapeHtml(segmentLabels[sKey])}</td><td style="text-align:left">${d}</td>`;
@@ -1379,6 +1461,33 @@ async function initDateTab() {
     el('dateTableWrap').style.display = dateTableVisible ? 'block' : 'none';
     el('dateTableToggle').textContent  = dateTableVisible ? '표 숨기기' : '표로 보기';
     renderDateTable();
+  });
+
+  el('dateRangeAllBtn').addEventListener('click', () => setDateRange(dates[0], dates[dates.length - 1], 'dateRangeAllBtn'));
+  el('dateRangeFirst5Btn').addEventListener('click', () => setDateRange(dates[0], dates[Math.min(4, dates.length - 1)], 'dateRangeFirst5Btn'));
+  el('dateRangeFirst10Btn').addEventListener('click', () => setDateRange(dates[0], dates[Math.min(9, dates.length - 1)], 'dateRangeFirst10Btn'));
+  fromSelEl.addEventListener('change', () => {
+    if (fromSelEl.value > dateRangeTo) toSelEl.value = dateRangeTo = fromSelEl.value;
+    dateRangeFrom = fromSelEl.value;
+    setDateRange(dateRangeFrom, dateRangeTo, null);
+  });
+  toSelEl.addEventListener('change', () => {
+    if (toSelEl.value < dateRangeFrom) fromSelEl.value = dateRangeFrom = toSelEl.value;
+    dateRangeTo = toSelEl.value;
+    setDateRange(dateRangeFrom, dateRangeTo, null);
+  });
+
+  el('dateModeAmount').addEventListener('click', () => {
+    dateDisplayMode = 'amount';
+    el('dateModeAmount').classList.add('active');
+    el('dateModePercent').classList.remove('active');
+    renderDateChart();
+  });
+  el('dateModePercent').addEventListener('click', () => {
+    dateDisplayMode = 'percent';
+    el('dateModePercent').classList.add('active');
+    el('dateModeAmount').classList.remove('active');
+    renderDateChart();
   });
 }
 </script>
