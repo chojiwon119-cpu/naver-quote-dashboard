@@ -393,6 +393,33 @@
       <div class="scroll-x" id="dateTableWrap" style="display:none;"></div>
     </div>
 
+    <div class="panel">
+      <h2>보험사 순위 분석 — 1위 / Top3 비율 추이</h2>
+      <div class="filters" style="margin-bottom: 10px;">
+        <div>
+          <label for="dateRankScopeSel">분류</label>
+          <select id="dateRankScopeSel">
+            <option value="all">전체</option>
+            <option value="maker">제조사</option>
+            <option value="model">차종</option>
+            <option value="segment">세그먼트</option>
+          </select>
+        </div>
+        <div id="dateRankScopeValueWrap" style="display:none;">
+          <label for="dateRankScopeValueSel">분류값</label>
+          <select id="dateRankScopeValueSel"></select>
+        </div>
+        <div>
+          <label for="dateRankCompanySel">보험사</label>
+          <select id="dateRankCompanySel"></select>
+        </div>
+      </div>
+      <div class="meta" id="dateRankScopeLine" style="margin-bottom: 10px;"></div>
+      <div class="rank-stats" id="dateRankStats"></div>
+      <div class="chart-box" style="height: 280px;"><canvas id="dateRankChart"></canvas></div>
+      <div class="empty-state" id="dateRankEmpty" style="display:none;">순위를 매길 표본(같은 날 · 같은 차종 · 같은 세그먼트에 보험사 2곳 이상 견적)이 아직 없습니다.</div>
+    </div>
+
   </div><!-- /tab-bydate -->
 
 </div>
@@ -1493,14 +1520,151 @@ async function initDateTab() {
     el('dateTableWrap').innerHTML = html;
   }
 
+  // ── 보험사 순위 분석 (전체 차종 대상, 분류별로 좁혀볼 수 있음) ──
+  let dateRankChart = null;
+  const rankScopeSelEl = el('dateRankScopeSel');
+  const rankScopeValueSelEl = el('dateRankScopeValueSel');
+  const rankScopeValueWrapEl = el('dateRankScopeValueWrap');
+  const rankCompanySelEl = el('dateRankCompanySel');
+
+  function buildRankCompanyOptions() {
+    const insurers = [...companies].sort((a, b) => {
+      const ia = DATE_INSURER_ORDER.indexOf(a), ib = DATE_INSURER_ORDER.indexOf(b);
+      return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+    });
+    rankCompanySelEl.innerHTML = insurers.map(i => `<option value="${escapeHtml(i)}">${escapeHtml(i)}</option>`).join('');
+    if (insurers.includes('한화손보')) rankCompanySelEl.value = '한화손보';
+  }
+  function onRankScopeChange() {
+    const scope = rankScopeSelEl.value;
+    if (scope === 'all') {
+      rankScopeValueWrapEl.style.display = 'none';
+    } else if (scope === 'segment') {
+      rankScopeValueSelEl.innerHTML = segmentKeys.map(sKey =>
+        `<option value="${escapeHtml(sKey)}">${escapeHtml(segmentLabels[sKey])}</option>`
+      ).join('');
+      rankScopeValueWrapEl.style.display = '';
+    } else {
+      const values = uniq(vehicleEntries.map(e => scope === 'maker' ? e.maker : e.model))
+        .filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
+      rankScopeValueSelEl.innerHTML = values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      rankScopeValueWrapEl.style.display = '';
+    }
+    renderDateRanking();
+  }
+  function computeDateRankingTrend(company) {
+    const scope = rankScopeSelEl.value;
+    const scopeValue = rankScopeValueSelEl.value;
+    const dayMap = {}; // 보험시작일 -> "차종|||세그먼트" -> {보험사: 총보험료}
+    rows.forEach(r => {
+      const date = r[3], co = r[5];
+      if (!date || !co) return;
+      const val = parsePriceStr(r[7]);
+      if (val == null) return;
+      const vKey = vehicleKeyOf(r);
+      const entry = parseVehicleKey(vKey);
+      const sKey = segmentKeyOf(r);
+      if (scope === 'maker' && entry.maker !== scopeValue) return;
+      if (scope === 'model' && entry.model !== scopeValue) return;
+      if (scope === 'segment' && sKey !== scopeValue) return;
+      const bucketKey = `${vKey}|||${sKey}`;
+      dayMap[date] = dayMap[date] || {};
+      dayMap[date][bucketKey] = dayMap[date][bucketKey] || {};
+      dayMap[date][bucketKey][co] = val;
+    });
+    const rankDates = Object.keys(dayMap).sort();
+    return rankDates.map(day => {
+      let total = 0, rank1 = 0, top3 = 0;
+      Object.values(dayMap[day]).forEach(group => {
+        const entries = Object.entries(group);
+        if (entries.length < 2 || !(company in group)) return;
+        entries.sort((a, b) => a[1] - b[1]);
+        const rank = entries.findIndex(([ins]) => ins === company) + 1;
+        total++;
+        if (rank === 1) rank1++;
+        if (rank <= 3) top3++;
+      });
+      return { day, total, rank1, top3, pct1: total ? (rank1 / total) * 100 : null, pct3: total ? (top3 / total) * 100 : null };
+    });
+  }
+  function renderDateRanking() {
+    const company = rankCompanySelEl.value;
+    if (!company) return;
+    const scope = rankScopeSelEl.value;
+    const scopeLabel = scope === 'all' ? '전체 차종 대상'
+      : scope === 'segment' ? `세그먼트: ${segmentLabels[rankScopeValueSelEl.value] || rankScopeValueSelEl.value}`
+      : `${scope === 'maker' ? '제조사' : '차종'}: ${rankScopeValueSelEl.value}`;
+    el('dateRankScopeLine').textContent = `${scopeLabel} · 총보험료(결제) 낮은 순 랭킹`;
+
+    const trend = computeDateRankingTrend(company).filter(t => t.total > 0);
+    el('dateRankEmpty').style.display = trend.length === 0 ? 'block' : 'none';
+
+    const latest = trend[trend.length - 1];
+    el('dateRankStats').innerHTML = latest ? `
+      <div class="stat-tile"><div class="stat-label">최근(${latest.day}) 1위 비율</div><div class="stat-value">${latest.pct1.toFixed(0)}%</div></div>
+      <div class="stat-tile"><div class="stat-label">최근 Top3 비율</div><div class="stat-value">${latest.pct3.toFixed(0)}%</div></div>
+      <div class="stat-tile"><div class="stat-label">표본(차종·세그먼트 수)</div><div class="stat-value">${latest.total}</div></div>
+    ` : '';
+
+    const ctx = el('dateRankChart').getContext('2d');
+    if (dateRankChart) dateRankChart.destroy();
+    if (trend.length === 0) return;
+    dateRankChart = new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: trend.map(t => t.day),
+        datasets: [
+          {
+            label: '1위 비율(%)', data: trend.map(t => t.pct1),
+            borderColor: cssVar('--series-1'), backgroundColor: cssVar('--series-1'),
+            borderWidth: 2, pointRadius: 3, pointHoverRadius: 5, tension: 0.15,
+          },
+          {
+            label: 'Top3 비율(%)', data: trend.map(t => t.pct3),
+            borderColor: cssVar('--series-2'), backgroundColor: cssVar('--series-2'),
+            borderWidth: 2, borderDash: [6, 3], pointRadius: 3, pointHoverRadius: 5, tension: 0.15,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { position: 'bottom', labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+          tooltip: {
+            backgroundColor: cssVar('--surface-1'), titleColor: cssVar('--text-primary'), bodyColor: cssVar('--text-secondary'),
+            borderColor: cssVar('--border'), borderWidth: 1,
+            callbacks: { label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%` },
+          },
+        },
+        scales: {
+          x: { grid: { color: cssVar('--grid-line') }, ticks: { color: cssVar('--text-muted') } },
+          y: {
+            min: 0, max: 100,
+            grid: { color: cssVar('--grid-line') },
+            ticks: { color: cssVar('--text-muted'), callback: (v) => `${v}%` },
+            border: { color: cssVar('--axis-line') },
+          },
+        },
+      },
+    });
+    attachLineHighlight(dateRankChart);
+  }
+
   buildMakerOptions();
   buildSegmentOptions();
+  buildRankCompanyOptions();
   onMakerChange();
+  onRankScopeChange();
 
   makerSelEl.addEventListener('change', onMakerChange);
   modelSelEl.addEventListener('change', onModelChange);
   specSelEl.addEventListener('change', onSpecChange);
   segmentSelEl.addEventListener('change', onSegmentChange);
+  rankScopeSelEl.addEventListener('change', onRankScopeChange);
+  rankScopeValueSelEl.addEventListener('change', renderDateRanking);
+  rankCompanySelEl.addEventListener('change', renderDateRanking);
 
   el('dateInsurerAllBtn').addEventListener('click', () => {
     dateSelectedInsurers = new Set(lastOrderedDateInsurers.slice(0, MAX_INSURERS));
