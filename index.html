@@ -1191,6 +1191,11 @@ async function initDateTab() {
     return;
   }
 
+  // 날짜별 전체 조사 건수(차종·보험사 무관, 그 날 수집된 견적 row 개수) — 10건 이하인 날짜는
+  // 표본이 너무 적어 그래프가 튀어보이므로 아래 두 그래프(추이/순위)에서 제외한다.
+  const dateRowCounts = {};
+  rows.forEach(r => { const d = r[3]; if (!d) return; dateRowCounts[d] = (dateRowCounts[d] || 0) + 1; });
+
   const { lookup, vehicleLabels, segmentLabels } = buildDateLookup(rows);
   const vehicleKeys = Object.keys(vehicleLabels);
   const vehicleEntries = vehicleKeys.map(key => ({ key, ...parseVehicleKey(key) }));
@@ -1402,7 +1407,7 @@ async function initDateTab() {
 
   function renderDateChart() {
     const ctx = el('dateChart').getContext('2d');
-    const vDates = visibleDates();
+    const vDates = visibleDates().filter(d => (dateRowCounts[d] || 0) > 10);
     const activeCos = lastOrderedDateInsurers.filter(co => dateSelectedInsurers.has(co));
     const isPct = dateDisplayMode === 'percent';
     const changes = currentChanges();
@@ -1606,7 +1611,7 @@ async function initDateTab() {
       dayMap[date][bucketKey] = dayMap[date][bucketKey] || {};
       dayMap[date][bucketKey][co] = val;
     });
-    const rankDates = Object.keys(dayMap).sort();
+    const rankDates = Object.keys(dayMap).sort().filter(d => (dateRowCounts[d] || 0) > 10);
     return rankDates.map(day => {
       let total = 0, rank1 = 0, top3 = 0;
       Object.values(dayMap[day]).forEach(group => {
