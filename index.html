@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>네이버페이 자동차보험 견적 비교</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 <style>
   :root {
     color-scheme: light;
@@ -223,7 +224,10 @@
       <h1>네이버페이 자동차보험 견적 비교</h1>
       <div class="meta" id="metaLine">데이터 로딩 중…</div>
     </div>
-    <button class="theme-btn" id="themeBtn">다크 모드</button>
+    <div style="display:flex; gap:8px;">
+      <button class="theme-btn" id="downloadBtn">엑셀 다운로드</button>
+      <button class="theme-btn" id="themeBtn">다크 모드</button>
+    </div>
   </header>
 
   <nav class="tab-nav" role="tablist">
@@ -931,6 +935,33 @@ function wireStaticEvents() {
     renderChart();
     renderRanking();
   });
+  el('downloadBtn').addEventListener('click', downloadRawXlsx);
+}
+
+const DATE_CSV_HEADER = ['번호', '실행시각', '차량번호', '보험시작일', '운전자범위', '보험사',
+  'CM보험료', '총보험료(결제)', '마일리지환급', '원문텍스트', '제조사', '차종', '연식',
+  '상세모델', '트림', '아이디', '나이', '성별'];
+
+async function downloadRawXlsx() {
+  const btn = el('downloadBtn');
+  const original = btn.textContent;
+  btn.textContent = '다운로드 중…';
+  btn.disabled = true;
+  try {
+    const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
+    const text = await res.text();
+    const rows = parseDateCsv(text);
+    const aoa = [DATE_CSV_HEADER, ...rows];
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, '견적데이터');
+    XLSX.writeFile(wb, `naver_quotes_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (e) {
+    alert('다운로드 실패: ' + e.message);
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
 }
 
 function setMoversFilter(f) {
