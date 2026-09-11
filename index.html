@@ -215,6 +215,33 @@
   .ci-up   { color: var(--delta-up); }
   .ci-down { color: var(--delta-down); }
   .empty-note { color: var(--text-muted); font-size: 13px; padding: 16px 0; }
+
+  /* ── 한화손보 인사이트 탭 ── */
+  .narrative-item {
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px;
+    display: flex; align-items: center; gap: 12px; cursor: pointer; margin-bottom: 8px;
+  }
+  .narrative-item:hover { background: var(--chip-bg-active); }
+  .narrative-badge {
+    flex: none; width: 56px; text-align: center; font-weight: 700; font-size: 13px;
+    padding: 4px 0; border-radius: 8px;
+  }
+  .narrative-badge.up { color: var(--cmp-good); background: rgba(12,163,12,0.12); }
+  .narrative-badge.down { color: var(--cmp-bad); background: rgba(227,73,72,0.12); }
+  .narrative-body { flex: 1; min-width: 0; }
+  .narrative-title { font-size: 13.5px; font-weight: 600; margin-bottom: 2px; }
+  .narrative-reason { font-size: 12.5px; color: var(--text-secondary); }
+  .narrative-stat { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; flex: none; }
+
+  .heatmap-table { border-collapse: separate; border-spacing: 3px; font-size: 12px; }
+  .heatmap-table th { color: var(--text-muted); font-weight: 600; font-size: 11px; padding: 4px 6px; }
+  .heatmap-table td.hm-label { text-align: left; color: var(--text-primary); font-weight: 500; cursor: pointer; padding: 4px 10px 4px 2px; white-space: nowrap; }
+  .heatmap-table td.hm-label:hover { text-decoration: underline; }
+  .heatmap-cell {
+    border-radius: 6px; min-width: 48px; text-align: center; padding: 6px 4px;
+    color: #fff; font-weight: 700; font-size: 11px; text-shadow: 0 1px 1.5px rgba(0,0,0,0.35);
+  }
+  .heatmap-cell.empty { color: var(--text-muted); font-weight: 400; text-shadow: none; background: var(--page-plane) !important; }
 </style>
 </head>
 <body>
@@ -233,6 +260,7 @@
   <nav class="tab-nav" role="tablist">
     <button class="tab-nav-btn" role="tab" data-tab="vehicle" aria-selected="false">차종별 추이</button>
     <button class="tab-nav-btn active" role="tab" data-tab="bydate" aria-selected="true">날짜별 보험료</button>
+    <button class="tab-nav-btn" role="tab" data-tab="insight" aria-selected="false">한화손보 인사이트</button>
   </nav>
 
   <div id="tab-vehicle" class="tab-pane">
@@ -425,6 +453,28 @@
     </div>
 
   </div><!-- /tab-bydate -->
+
+  <div id="tab-insight" class="tab-pane">
+
+    <div class="panel">
+      <h2>한화손보 경쟁력 스냅샷</h2>
+      <p class="panel-sub" id="insightScopeLine">불러오는 중…</p>
+      <div class="summary-grid" id="insightKpiGrid"></div>
+    </div>
+
+    <div class="panel">
+      <h2>경쟁력 변화 요약</h2>
+      <p class="panel-sub">직전 절반 기간 대비 최근 절반 기간 1위 비율 변화가 큰 차종 순 · 조사 건수 10건 이하 날짜는 제외 · 항목을 클릭하면 "날짜별 보험료" 탭에서 바로 확인할 수 있습니다.</p>
+      <div id="insightNarrativeList"><p class="empty-note">불러오는 중…</p></div>
+    </div>
+
+    <div class="panel">
+      <h2>차종별 1위 비율 히트맵 (주간)</h2>
+      <p class="panel-sub">표본이 많은 차종 상위 <span id="insightHeatmapCount">-</span>개 · 진한 초록일수록 그 주 1위 비율이 높고, 진한 빨강일수록 낮습니다 · 회색은 표본 없음 · 차종명을 클릭하면 "날짜별 보험료" 탭에서 바로 확인할 수 있습니다.</p>
+      <div class="scroll-x" id="insightHeatmapWrap"><p class="empty-note">불러오는 중…</p></div>
+    </div>
+
+  </div><!-- /tab-insight -->
 
 </div>
 
@@ -993,6 +1043,11 @@ boot();
 
 // ── 탭 전환 ── (기본 활성 탭: 날짜별 보험료 — 페이지 열자마자 바로 로드)
 let _dateInited = false;
+let _insightInited = false;
+// 인사이트 탭에서 "날짜별 보험료" 탭으로 드릴다운할 때, initDateTab()의 select 요소가
+// 채워질 때까지 기다리기 위한 신호 — initDateTab 맨 끝에서 resolve 된다.
+let _resolveDateTabReady;
+const dateTabReadyPromise = new Promise(res => { _resolveDateTabReady = res; });
 initDateTab();
 _dateInited = true;
 
@@ -1012,9 +1067,20 @@ _dateInited = true;
         _dateInited = true;
         initDateTab();
       }
+      if (tab === 'insight' && !_insightInited) {
+        _insightInited = true;
+        initInsightTab();
+      }
     });
   });
 })();
+
+async function jumpToVehicleInBydate(vKey) {
+  document.querySelector('.tab-nav-btn[data-tab="bydate"]').click();
+  await dateTabReadyPromise;
+  if (window.__jumpToDateTabVehicle) window.__jumpToDateTabVehicle(vKey);
+  el('dateChart').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
 
 // ── 날짜별 보험료 탭 ──
 const DATE_INSURER_ORDER = ['삼성화재','현대해상','DB손해보험','KB손해보험','메리츠화재','롯데손해보험','흥국화재','하나손해보험','한화손보','AXA'];
@@ -1747,6 +1813,270 @@ async function initDateTab() {
     el('dateModeAmount').classList.remove('active');
     renderDateChart();
   });
+
+  // 인사이트 탭에서 차종을 클릭해 여기로 드릴다운할 때 쓰는 진입점.
+  // vKey 형식은 vehicleKeyOf()가 만드는 것과 동일(예: "현대|||그랜저|||2024|||...|||..." 또는 "car|||12가3456").
+  window.__jumpToDateTabVehicle = function (vKey) {
+    const entry = parseVehicleKey(vKey);
+    const hasOption = (sel, val) => [...sel.options].some(o => o.value === val);
+    if (hasOption(makerSelEl, entry.maker)) { makerSelEl.value = entry.maker; onMakerChange(); }
+    if (hasOption(modelSelEl, entry.model)) { modelSelEl.value = entry.model; onModelChange(); }
+    if (hasOption(specSelEl, vKey)) { specSelEl.value = vKey; onSpecChange(); }
+  };
+
+  _resolveDateTabReady();
+}
+
+// ── 한화손보 인사이트 탭 ──
+const HANWHA = '한화손보';
+
+// 순위%를 빨강(낮음)→노랑→초록(높음)으로 매핑 — 히트맵 조건부 서식용
+function heatColor(pct) {
+  const stops = [[227, 73, 72], [237, 161, 0], [12, 163, 12]];
+  const t = Math.max(0, Math.min(100, pct)) / 100;
+  const seg = t < 0.5 ? 0 : 1;
+  const localT = t < 0.5 ? t / 0.5 : (t - 0.5) / 0.5;
+  const [r1, g1, b1] = stops[seg], [r2, g2, b2] = stops[seg + 1];
+  const r = Math.round(r1 + (r2 - r1) * localT);
+  const g = Math.round(g1 + (g2 - g1) * localT);
+  const b = Math.round(b1 + (b2 - b1) * localT);
+  return `rgb(${r},${g},${b})`;
+}
+
+function avg(arr) {
+  const v = arr.filter(x => x != null);
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+
+async function initInsightTab() {
+  const scopeEl = el('insightScopeLine');
+  const kpiEl = el('insightKpiGrid');
+  const narrativeEl = el('insightNarrativeList');
+  const heatmapWrapEl = el('insightHeatmapWrap');
+  scopeEl.textContent = '불러오는 중…';
+
+  let rows = [];
+  try {
+    const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
+    if (res.ok) rows = parseDateCsv(await res.text());
+  } catch (e) {}
+
+  if (!rows.length) {
+    scopeEl.textContent = '데이터 없음';
+    narrativeEl.innerHTML = '<p class="empty-note">quotes_by_date.csv 파일이 없습니다.</p>';
+    heatmapWrapEl.innerHTML = '';
+    return;
+  }
+
+  // 날짜별 탭과 동일한 기준: 그 날 전체 조사 건수가 10건 이하면 표본이 너무 적어
+  // 순위가 튀므로 제외한다.
+  const dateRowCounts = {};
+  rows.forEach(r => { const d = r[3]; if (!d) return; dateRowCounts[d] = (dateRowCounts[d] || 0) + 1; });
+  const validDates = uniq(rows.map(r => r[3]).filter(Boolean)).filter(d => dateRowCounts[d] > 10).sort();
+
+  if (validDates.length < 4) {
+    scopeEl.textContent = '표본이 부족해 인사이트를 계산할 수 없습니다 (조사 건수 10건 초과 날짜가 4일 미만).';
+    kpiEl.innerHTML = ''; narrativeEl.innerHTML = ''; heatmapWrapEl.innerHTML = '';
+    return;
+  }
+
+  // 이전 절반 / 최근 절반 기간을 날짜 기준으로 고정 — 차종마다 표본 수가 달라도
+  // 모두 같은 기준 날짜로 비교해야 공평하다.
+  const midIdx = Math.floor(validDates.length / 2);
+  const prevDateSet = new Set(validDates.slice(0, midIdx));
+  const recentDateSet = new Set(validDates.slice(midIdx));
+  const validDateSet = new Set(validDates);
+
+  // vehicleKey -> date -> insurer -> {price, time}
+  const lookup = {};
+  const vehicleLabels = {};
+  rows.forEach(r => {
+    const date = r[3], co = r[5], time = r[1];
+    if (!date || !co || !validDateSet.has(date)) return;
+    const price = parsePriceStr(r[7]);
+    if (price == null) return;
+    const vKey = vehicleKeyOf(r);
+    vehicleLabels[vKey] = vehicleLabelOf(r);
+    lookup[vKey] = lookup[vKey] || {};
+    lookup[vKey][date] = lookup[vKey][date] || {};
+    const ex = lookup[vKey][date][co];
+    if (!ex || time > ex.time) lookup[vKey][date][co] = { price, time };
+  });
+
+  // 같은 날 2개사 이상 견적이 있고 한화손보가 포함된 날짜만 순위 계산 대상
+  function rankSeriesFor(vKey) {
+    const byDate = lookup[vKey] || {};
+    return validDates.map(d => {
+      const dayData = byDate[d];
+      if (!dayData || !(HANWHA in dayData)) return null;
+      const entries = Object.entries(dayData).map(([co, v]) => [co, v.price]);
+      if (entries.length < 2) return null;
+      entries.sort((a, b) => a[1] - b[1]);
+      const rank = entries.findIndex(([co]) => co === HANWHA) + 1;
+      return { day: d, rank, hanwhaPrice: dayData[HANWHA].price, all: dayData };
+    }).filter(Boolean);
+  }
+
+  const vehicleKeys = Object.keys(vehicleLabels).filter(vKey => rankSeriesFor(vKey).length >= 4);
+
+  function splitByDate(series) {
+    return {
+      prev: series.filter(s => prevDateSet.has(s.day)),
+      recent: series.filter(s => recentDateSet.has(s.day)),
+    };
+  }
+  function pctRate(arr, pred) { return arr.length ? (arr.filter(pred).length / arr.length) * 100 : null; }
+
+  // 같은 기간 동안 경쟁사들의 평균 가격이 얼마나 움직였는지 (원인 설명용)
+  function competitorPriceChange(prevArr, recentArr) {
+    const cp = {}, cr = {};
+    prevArr.forEach(s => Object.entries(s.all).forEach(([co, v]) => { if (co !== HANWHA) (cp[co] ??= []).push(v.price); }));
+    recentArr.forEach(s => Object.entries(s.all).forEach(([co, v]) => { if (co !== HANWHA) (cr[co] ??= []).push(v.price); }));
+    const out = [];
+    Object.keys(cp).forEach(co => {
+      if (!cr[co]) return;
+      const p = avg(cp[co]), r = avg(cr[co]);
+      if (p == null || r == null || !p) return;
+      out.push({ co, pct: (r - p) / p * 100 });
+    });
+    return out.sort((a, b) => a.pct - b.pct);
+  }
+
+  function buildReason(deltaPct1, hanwhaPct, compChanges) {
+    if (deltaPct1 < 0) {
+      if (hanwhaPct != null && hanwhaPct > 1) return `한화손보 가격이 ${hanwhaPct.toFixed(1)}% 인상됨`;
+      const drop = compChanges[0];
+      if (drop && drop.pct < -1) return `${drop.co}가 가격을 ${Math.abs(drop.pct).toFixed(1)}% 인하함`;
+      return '경쟁사 대비 상대적으로 밀림 (개별 보험사 가격 변동은 뚜렷하지 않음)';
+    }
+    if (hanwhaPct != null && hanwhaPct < -1) return `한화손보 가격이 ${Math.abs(hanwhaPct).toFixed(1)}% 인하됨`;
+    const rise = compChanges[compChanges.length - 1];
+    if (rise && rise.pct > 1) return `${rise.co}가 가격을 ${rise.pct.toFixed(1)}% 인상함`;
+    return '경쟁사 대비 상대적으로 개선됨 (개별 보험사 가격 변동은 뚜렷하지 않음)';
+  }
+
+  const moves = vehicleKeys.map(vKey => {
+    const { prev, recent } = splitByDate(rankSeriesFor(vKey));
+    if (prev.length < 2 || recent.length < 2) return null;
+    const prevPct1 = pctRate(prev, s => s.rank === 1);
+    const recentPct1 = pctRate(recent, s => s.rank === 1);
+    const prevPct3 = pctRate(prev, s => s.rank <= 3);
+    const recentPct3 = pctRate(recent, s => s.rank <= 3);
+    const deltaPct1 = recentPct1 - prevPct1;
+    const prevPrice = avg(prev.map(s => s.hanwhaPrice));
+    const recentPrice = avg(recent.map(s => s.hanwhaPrice));
+    const hanwhaPct = prevPrice ? (recentPrice - prevPrice) / prevPrice * 100 : null;
+    const compChanges = competitorPriceChange(prev, recent);
+    return {
+      vKey, label: vehicleLabels[vKey],
+      prevPct1, recentPct1, deltaPct1, prevPct3, recentPct3,
+      reason: Math.abs(deltaPct1) >= 1 ? buildReason(deltaPct1, hanwhaPct, compChanges) : '뚜렷한 변화 없음',
+    };
+  }).filter(Boolean);
+
+  // ── KPI ──
+  const allSeries = vehicleKeys.flatMap(rankSeriesFor);
+  const { prev: overallPrev, recent: overallRecent } = splitByDate(allSeries);
+  const overallPrevPct1 = pctRate(overallPrev, s => s.rank === 1);
+  const overallRecentPct1 = pctRate(overallRecent, s => s.rank === 1);
+  const overallPrevPct3 = pctRate(overallPrev, s => s.rank <= 3);
+  const overallRecentPct3 = pctRate(overallRecent, s => s.rank <= 3);
+
+  const gainers = [...moves].filter(m => m.deltaPct1 > 0).sort((a, b) => b.deltaPct1 - a.deltaPct1);
+  const losers = [...moves].filter(m => m.deltaPct1 < 0).sort((a, b) => a.deltaPct1 - b.deltaPct1);
+
+  scopeEl.textContent = `${validDates[0]} ~ ${validDates[validDates.length - 1]} · 조사 건수 10건 초과 날짜 ${validDates.length}일 기준 · 이전 기간 ${validDates[0]}~${validDates[midIdx - 1]} vs 최근 기간 ${validDates[midIdx]}~${validDates[validDates.length - 1]} · 표본 차종 ${moves.length}종`;
+
+  function kpiDeltaHtml(prevV, recentV) {
+    if (prevV == null || recentV == null) return '<div class="stat-delta">-</div>';
+    const diff = recentV - prevV;
+    const cls = diff > 0.5 ? 'delta-up' : (diff < -0.5 ? 'delta-down' : '');
+    const sign = diff > 0 ? '+' : '';
+    return `<div class="stat-delta ${cls}">${sign}${diff.toFixed(1)}%p (이전 ${prevV.toFixed(0)}% → 최근 ${recentV.toFixed(0)}%)</div>`;
+  }
+
+  kpiEl.innerHTML = `
+    <div class="stat-tile">
+      <div class="stat-label">전체 1위 비율</div>
+      <div class="stat-value">${overallRecentPct1 != null ? overallRecentPct1.toFixed(0) + '%' : '-'}</div>
+      ${kpiDeltaHtml(overallPrevPct1, overallRecentPct1)}
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">전체 Top3 비율</div>
+      <div class="stat-value">${overallRecentPct3 != null ? overallRecentPct3.toFixed(0) + '%' : '-'}</div>
+      ${kpiDeltaHtml(overallPrevPct3, overallRecentPct3)}
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">가장 강해진 차종</div>
+      <div class="stat-value" style="font-size:13px;">${gainers[0] ? escapeHtml(gainers[0].label) : '-'}</div>
+      <div class="stat-delta delta-up">${gainers[0] ? `+${gainers[0].deltaPct1.toFixed(0)}%p` : ''}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="stat-label">가장 약해진 차종</div>
+      <div class="stat-value" style="font-size:13px;">${losers[0] ? escapeHtml(losers[0].label) : '-'}</div>
+      <div class="stat-delta delta-down">${losers[0] ? `${losers[0].deltaPct1.toFixed(0)}%p` : ''}</div>
+    </div>
+  `;
+
+  // ── 경쟁력 변화 요약 ── 변화폭 큰 순 상위 8개(방향 무관)
+  const topMoves = [...moves].sort((a, b) => Math.abs(b.deltaPct1) - Math.abs(a.deltaPct1)).slice(0, 8);
+  narrativeEl.innerHTML = topMoves.length ? topMoves.map(m => {
+    const up = m.deltaPct1 > 0;
+    const sign = up ? '+' : '';
+    return `<div class="narrative-item" data-vkey="${escapeHtml(m.vKey)}">
+      <div class="narrative-badge ${up ? 'up' : 'down'}">${sign}${m.deltaPct1.toFixed(0)}%p</div>
+      <div class="narrative-body">
+        <div class="narrative-title">${escapeHtml(m.label)}</div>
+        <div class="narrative-reason">${escapeHtml(m.reason)}</div>
+      </div>
+      <div class="narrative-stat">1위비율 ${m.prevPct1.toFixed(0)}%→${m.recentPct1.toFixed(0)}%</div>
+    </div>`;
+  }).join('') : '<p class="empty-note">변화가 감지된 차종이 없습니다.</p>';
+
+  [...narrativeEl.querySelectorAll('.narrative-item')].forEach(item => {
+    item.addEventListener('click', () => jumpToVehicleInBydate(item.dataset.vkey));
+  });
+
+  // ── 주간 히트맵 (표본 많은 차종 상위 12개) ──
+  function weekKeyOf(dateStr) {
+    const dt = new Date(dateStr + 'T00:00:00');
+    const day = dt.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const monday = new Date(dt);
+    monday.setDate(dt.getDate() + diff);
+    return monday.toISOString().slice(0, 10);
+  }
+  const weeks = uniq(validDates.map(weekKeyOf)).sort();
+
+  const heatmapVehicles = vehicleKeys
+    .map(vKey => ({ vKey, series: rankSeriesFor(vKey) }))
+    .sort((a, b) => b.series.length - a.series.length)
+    .slice(0, 12);
+
+  el('insightHeatmapCount').textContent = String(heatmapVehicles.length);
+
+  if (!heatmapVehicles.length) {
+    heatmapWrapEl.innerHTML = '<p class="empty-note">히트맵을 그릴 표본이 부족합니다.</p>';
+  } else {
+    const bodyRows = heatmapVehicles.map(({ vKey, series }) => {
+      const byWeek = {};
+      series.forEach(s => { (byWeek[weekKeyOf(s.day)] ??= []).push(s); });
+      const cells = weeks.map(w => {
+        const arr = byWeek[w];
+        if (!arr || !arr.length) return `<td class="heatmap-cell empty">-</td>`;
+        const pct1 = pctRate(arr, s => s.rank === 1);
+        return `<td class="heatmap-cell" style="background:${heatColor(pct1)}">${pct1.toFixed(0)}%</td>`;
+      }).join('');
+      return `<tr><td class="hm-label" data-vkey="${escapeHtml(vKey)}">${escapeHtml(vehicleLabels[vKey])}</td>${cells}</tr>`;
+    }).join('');
+    heatmapWrapEl.innerHTML = `<table class="heatmap-table">
+      <thead><tr><th></th>${weeks.map(w => `<th>${w.slice(5)}주~</th>`).join('')}</tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+    [...heatmapWrapEl.querySelectorAll('.hm-label')].forEach(td => {
+      td.addEventListener('click', () => jumpToVehicleInBydate(td.dataset.vkey));
+    });
+  }
 }
 </script>
 </body>
