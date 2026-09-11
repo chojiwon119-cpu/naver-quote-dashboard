@@ -988,9 +988,27 @@ function wireStaticEvents() {
   el('downloadBtn').addEventListener('click', downloadRawXlsx);
 }
 
-const DATE_CSV_HEADER = ['번호', '실행시각', '차량번호', '보험시작일', '운전자범위', '보험사',
+const DATE_CSV_HEADER = ['번호', '실행시각', '차량번호', '보험시작일', '운전자범위', '보험사', '순위',
   'CM보험료', '총보험료(결제)', '마일리지환급', '원문텍스트', '제조사', '차종', '연식',
   '상세모델', '트림', '아이디', '나이', '성별'];
+
+// 같은 배치(차량번호·보험시작일·아이디가 같은 견적 묶음) 안에서 총보험료(결제) 낮은 순으로 1,2,3... 순위를 매긴다.
+function computeRanks(rows) {
+  const groups = {};
+  rows.forEach((r, idx) => {
+    const key = [r[2], r[3], r[15]].join('|||'); // 차량번호, 보험시작일, 아이디
+    (groups[key] ??= []).push(idx);
+  });
+  const ranks = new Array(rows.length).fill(null);
+  Object.values(groups).forEach(idxs => {
+    const withPrice = idxs
+      .map(i => ({ i, price: parsePriceStr(rows[i][7]) }))
+      .filter(x => x.price != null)
+      .sort((a, b) => a.price - b.price);
+    withPrice.forEach((x, order) => { ranks[x.i] = order + 1; });
+  });
+  return ranks;
+}
 
 async function downloadRawXlsx() {
   const btn = el('downloadBtn');
@@ -1001,7 +1019,13 @@ async function downloadRawXlsx() {
     const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
     const text = await res.text();
     const rows = parseDateCsv(text);
-    const aoa = [DATE_CSV_HEADER, ...rows];
+    const ranks = computeRanks(rows);
+    const rowsWithRank = rows.map((r, i) => {
+      const copy = r.slice();
+      copy.splice(6, 0, ranks[i] ?? '');
+      return copy;
+    });
+    const aoa = [DATE_CSV_HEADER, ...rowsWithRank];
     const ws = XLSX.utils.aoa_to_sheet(aoa);
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, '견적데이터');
