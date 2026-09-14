@@ -392,7 +392,8 @@
       <div class="filter-head" style="margin-top:10px;">
         <label style="margin:0;">기간</label>
         <div class="bulk-btns">
-          <button class="bulk-btn active" id="dateRangeAllBtn">전체</button>
+          <button class="bulk-btn active" id="dateRangeLastMonthBtn">최근 1개월</button>
+          <button class="bulk-btn" id="dateRangeAllBtn">전체</button>
           <button class="bulk-btn" id="dateRangeFirst5Btn">앞 5개</button>
           <button class="bulk-btn" id="dateRangeFirst10Btn">앞 10개</button>
         </div>
@@ -1296,8 +1297,15 @@ async function initDateTab() {
   });
 
   const dates = uniq(rows.map(r => r[3]).filter(Boolean)).sort();
-  dateRangeFrom = dates[0];
-  dateRangeTo = dates[dates.length - 1];
+  // 기본값: 전체 이력 대신 최근 1개월만 — 데이터가 쌓일수록 첫 화면이 너무 길어지는 걸 방지
+  const lastDate = dates[dates.length - 1];
+  const monthAgo = (() => {
+    const dt = new Date(lastDate + 'T00:00:00');
+    dt.setMonth(dt.getMonth() - 1);
+    return dt.toISOString().slice(0, 10);
+  })();
+  dateRangeFrom = dates.find(d => d >= monthAgo) || dates[0];
+  dateRangeTo = lastDate;
 
   const fromSelEl = el('dateRangeFrom');
   const toSelEl   = el('dateRangeTo');
@@ -1308,13 +1316,14 @@ async function initDateTab() {
     fromSelEl.value = dateRangeFrom;
     toSelEl.value = dateRangeTo;
   }
+  const RANGE_BTN_IDS = ['dateRangeLastMonthBtn', 'dateRangeAllBtn', 'dateRangeFirst5Btn', 'dateRangeFirst10Btn'];
   function setDateRange(from, to, activeBtnId) {
     dateRangeFrom = from;
     dateRangeTo = to;
     fromSelEl.value = from;
     toSelEl.value = to;
     [...el('dateRangeAllBtn').closest('.panel').querySelectorAll('.bulk-btns .bulk-btn')]
-      .forEach(b => { if (['dateRangeAllBtn','dateRangeFirst5Btn','dateRangeFirst10Btn'].includes(b.id)) b.classList.toggle('active', b.id === activeBtnId); });
+      .forEach(b => { if (RANGE_BTN_IDS.includes(b.id)) b.classList.toggle('active', b.id === activeBtnId); });
     renderDateChart(); renderDateChanges(); renderDateTable();
   }
   function visibleDates() {
@@ -1811,6 +1820,7 @@ async function initDateTab() {
     renderDateTable();
   });
 
+  el('dateRangeLastMonthBtn').addEventListener('click', () => setDateRange(dates.find(d => d >= monthAgo) || dates[0], lastDate, 'dateRangeLastMonthBtn'));
   el('dateRangeAllBtn').addEventListener('click', () => setDateRange(dates[0], dates[dates.length - 1], 'dateRangeAllBtn'));
   el('dateRangeFirst5Btn').addEventListener('click', () => setDateRange(dates[0], dates[Math.min(4, dates.length - 1)], 'dateRangeFirst5Btn'));
   el('dateRangeFirst10Btn').addEventListener('click', () => setDateRange(dates[0], dates[Math.min(9, dates.length - 1)], 'dateRangeFirst10Btn'));
