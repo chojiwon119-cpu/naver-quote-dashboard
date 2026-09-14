@@ -1141,8 +1141,10 @@ async function downloadRank5Xlsx() {
     });
 
     const detailRows = [];
-    // date -> co -> { total, rank1, top3 }
+    // date -> co -> { total, rank1, top3 } — 전체 합산용
     const summary = {};
+    // date|||제조사|||차종|||나이|||성별 -> co -> { total, rank1, top3 } — 섹터별 분리용
+    const sectorSummary = {};
     Object.values(batches).forEach(entries => {
       entries.sort((a, b) => a.price - b.price);
       entries.forEach((e, idx) => {
@@ -1151,9 +1153,10 @@ async function downloadRank5Xlsx() {
         const isTop3 = rank <= 3;
         const r = e.row;
         const date = r[3], co = r[5];
+        const maker = r[10], model = r[11], age = r[16] || '미지정', gender = r[17] || '미지정';
         detailRows.push([
           r[1], r[2], date, r[15], r[16], r[17], // 실행시각,차량번호,보험시작일,아이디,나이,성별
-          r[10], r[11], r[12], r[13], r[14],       // 제조사,차종,연식,상세모델,트림
+          maker, model, r[12], r[13], r[14],       // 제조사,차종,연식,상세모델,트림
           co, e.price, rank, isTop1 ? 'O' : '', isTop3 ? 'O' : '',
         ]);
         summary[date] = summary[date] || {};
@@ -1161,6 +1164,13 @@ async function downloadRank5Xlsx() {
         summary[date][co].total++;
         if (isTop1) summary[date][co].rank1++;
         if (isTop3) summary[date][co].top3++;
+
+        const sectorKey = [date, maker, model, age, gender].join('|||');
+        sectorSummary[sectorKey] = sectorSummary[sectorKey] || {};
+        sectorSummary[sectorKey][co] = sectorSummary[sectorKey][co] || { total: 0, rank1: 0, top3: 0 };
+        sectorSummary[sectorKey][co].total++;
+        if (isTop1) sectorSummary[sectorKey][co].rank1++;
+        if (isTop3) sectorSummary[sectorKey][co].top3++;
       });
     });
 
@@ -1181,9 +1191,27 @@ async function downloadRank5Xlsx() {
       });
     });
 
+    // 섹터별(제조사·차종·나이·성별) 시트 — 표본 0인 조합은 생략(조합이 워낙 많아 0건만 나열하면 무의미)
+    const sectorHeader = ['보험시작일', '제조사', '차종', '나이', '성별', '보험사', '표본수', '1위건수', '1위비중(%)', 'Top3건수', 'Top3비중(%)'];
+    const sectorRows = [];
+    Object.keys(sectorSummary).sort().forEach(sectorKey => {
+      const [date, maker, model, age, gender] = sectorKey.split('|||');
+      RANK5_COMPANIES.forEach(co => {
+        const s = sectorSummary[sectorKey][co];
+        if (!s) return;
+        sectorRows.push([
+          date, maker, model, age, gender, co, s.total, s.rank1,
+          Math.round((s.rank1 / s.total) * 1000) / 10,
+          s.top3, Math.round((s.top3 / s.total) * 1000) / 10,
+        ]);
+      });
+    });
+
     const wb = XLSX.utils.book_new();
     const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeader, ...summaryRows]);
     XLSX.utils.book_append_sheet(wb, wsSummary, '일자별 1위·Top3 비중');
+    const wsSector = XLSX.utils.aoa_to_sheet([sectorHeader, ...sectorRows]);
+    XLSX.utils.book_append_sheet(wb, wsSector, '섹터별 1위·Top3 비중');
     const wsDetail = XLSX.utils.aoa_to_sheet([detailHeader, ...detailRows]);
     XLSX.utils.book_append_sheet(wb, wsDetail, '배치별 순위 상세');
     XLSX.writeFile(wb, `naver_quotes_rank5_${new Date().toISOString().slice(0, 10)}.xlsx`);
