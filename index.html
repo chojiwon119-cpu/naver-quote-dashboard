@@ -253,6 +253,7 @@
     </div>
     <div style="display:flex; gap:8px;">
       <button class="theme-btn" id="downloadBtn">엑셀 다운로드</button>
+      <button class="theme-btn" id="downloadRankBtn">5개사 순위 다운로드</button>
       <button class="theme-btn" id="themeBtn">다크 모드</button>
     </div>
   </header>
@@ -1105,6 +1106,93 @@ async function jumpToVehicleInBydate(vKey) {
   await dateTabReadyPromise;
   if (window.__jumpToDateTabVehicle) window.__jumpToDateTabVehicle(vKey);
   el('dateChart').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+// ── 5개사(한화손보/현대해상/삼성화재/KB손해보험/DB손해보험) 순위 분석 다운로드 ──
+const RANK5_COMPANIES = ['한화손보', '현대해상', '삼성화재', 'KB손해보험', 'DB손해보험'];
+
+el('downloadRankBtn').addEventListener('click', downloadRank5Xlsx);
+
+async function downloadRank5Xlsx() {
+  const btn = el('downloadRankBtn');
+  const original = btn.textContent;
+  btn.textContent = '다운로드 중…';
+  btn.disabled = true;
+  try {
+    const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
+    const text = await res.text();
+    const rows = parseDateCsv(text);
+
+    // 그 날 전체 조사 건수 10건 이하인 날짜는 다른 그래프들과 동일하게 제외 (표본 노이즈 방지)
+    const dateRowCounts = {};
+    rows.forEach(r => { const d = r[3]; if (!d) return; dateRowCounts[d] = (dateRowCounts[d] || 0) + 1; });
+
+    // 배치 = 같은 실행시각(초 단위)에 한 번에 조회된 견적 묶음.
+    // 차량번호는 테스트용 번호판이 여러 차종에 재사용되기도 해서 배치 키로 못 쓰지만,
+    // 실행시각은 자동화가 한 차종을 조회할 때마다 새로 찍기 때문에 그 자체로 배치를 유일하게 식별한다.
+    const batches = {};
+    rows.forEach(r => {
+      const date = r[3], co = r[5];
+      if (!date || !co || !RANK5_COMPANIES.includes(co)) return;
+      if ((dateRowCounts[date] || 0) <= 10) return;
+      const price = parsePriceStr(r[7]);
+      if (price == null) return;
+      (batches[r[1]] ??= []).push({ row: r, price });
+    });
+
+    const detailRows = [];
+    // date -> co -> { total, rank1, top3 }
+    const summary = {};
+    Object.values(batches).forEach(entries => {
+      entries.sort((a, b) => a.price - b.price);
+      entries.forEach((e, idx) => {
+        const rank = idx + 1;
+        const isTop1 = rank === 1;
+        const isTop3 = rank <= 3;
+        const r = e.row;
+        const date = r[3], co = r[5];
+        detailRows.push([
+          r[1], r[2], date, r[15], r[16], r[17], // 실행시각,차량번호,보험시작일,아이디,나이,성별
+          r[10], r[11], r[12], r[13], r[14],       // 제조사,차종,연식,상세모델,트림
+          co, e.price, rank, isTop1 ? 'O' : '', isTop3 ? 'O' : '',
+        ]);
+        summary[date] = summary[date] || {};
+        summary[date][co] = summary[date][co] || { total: 0, rank1: 0, top3: 0 };
+        summary[date][co].total++;
+        if (isTop1) summary[date][co].rank1++;
+        if (isTop3) summary[date][co].top3++;
+      });
+    });
+
+    const detailHeader = ['실행시각', '차량번호', '보험시작일', '아이디', '나이', '성별',
+      '제조사', '차종', '연식', '상세모델', '트림', '보험사', '총보험료(결제)', '순위(5개사 중)', '1위여부', 'Top3여부'];
+
+    const summaryHeader = ['보험시작일', '보험사', '표본수', '1위건수', '1위비중(%)', 'Top3건수', 'Top3비중(%)'];
+    const summaryRows = [];
+    Object.keys(summary).sort().forEach(date => {
+      RANK5_COMPANIES.forEach(co => {
+        const s = summary[date][co];
+        if (!s) { summaryRows.push([date, co, 0, 0, '', 0, '']); return; }
+        summaryRows.push([
+          date, co, s.total, s.rank1,
+          Math.round((s.rank1 / s.total) * 1000) / 10,
+          s.top3, Math.round((s.top3 / s.total) * 1000) / 10,
+        ]);
+      });
+    });
+
+    const wb = XLSX.utils.book_new();
+    const wsSummary = XLSX.utils.aoa_to_sheet([summaryHeader, ...summaryRows]);
+    XLSX.utils.book_append_sheet(wb, wsSummary, '일자별 1위·Top3 비중');
+    const wsDetail = XLSX.utils.aoa_to_sheet([detailHeader, ...detailRows]);
+    XLSX.utils.book_append_sheet(wb, wsDetail, '배치별 순위 상세');
+    XLSX.writeFile(wb, `naver_quotes_rank5_${new Date().toISOString().slice(0, 10)}.xlsx`);
+  } catch (e) {
+    alert('다운로드 실패: ' + e.message);
+  } finally {
+    btn.textContent = original;
+    btn.disabled = false;
+  }
 }
 
 // ── 날짜별 보험료 탭 ──
