@@ -1324,7 +1324,7 @@ async function initDateTab() {
     toSelEl.value = to;
     [...el('dateRangeAllBtn').closest('.panel').querySelectorAll('.bulk-btns .bulk-btn')]
       .forEach(b => { if (RANGE_BTN_IDS.includes(b.id)) b.classList.toggle('active', b.id === activeBtnId); });
-    renderDateChart(); renderDateChanges(); renderDateTable();
+    renderDateChart(); renderDateChanges(); renderDateTable(); renderDateRanking();
   }
   function visibleDates() {
     return dates.filter(d => d >= dateRangeFrom && d <= dateRangeTo);
@@ -1697,6 +1697,7 @@ async function initDateTab() {
     rows.forEach(r => {
       const date = r[3], co = r[5];
       if (!date || !co) return;
+      if (date < dateRangeFrom || date > dateRangeTo) return;
       const val = parsePriceStr(r[7]);
       if (val == null) return;
       const vKey = vehicleKeyOf(r);
