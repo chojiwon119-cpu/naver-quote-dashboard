@@ -931,8 +931,12 @@ function renderRanking() {
         legend: { position: 'bottom', labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
         tooltip: {
           backgroundColor: cssVar('--surface-1'), titleColor: cssVar('--text-primary'), bodyColor: cssVar('--text-secondary'),
+          footerColor: cssVar('--text-muted'),
           borderColor: cssVar('--border'), borderWidth: 1,
-          callbacks: { label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%` },
+          callbacks: {
+            label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%`,
+            footer: (items) => `표본(실행 건수): ${trend[items[0].dataIndex].total}건`,
+          },
         },
       },
       scales: {
@@ -1889,8 +1893,12 @@ async function initDateTab() {
           legend: { position: 'bottom', labels: { color: cssVar('--text-secondary'), boxWidth: 10, boxHeight: 10, usePointStyle: true } },
           tooltip: {
             backgroundColor: cssVar('--surface-1'), titleColor: cssVar('--text-primary'), bodyColor: cssVar('--text-secondary'),
+            footerColor: cssVar('--text-muted'),
             borderColor: cssVar('--border'), borderWidth: 1,
-            callbacks: { label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%` },
+            callbacks: {
+              label: (item) => `${item.dataset.label}: ${item.parsed.y.toFixed(0)}%`,
+              footer: (items) => `표본(실행 건수): ${trend[items[0].dataIndex].total}건`,
+            },
           },
         },
         scales: {
