@@ -482,16 +482,44 @@
   <div id="tab-pervehicle" class="tab-pane">
 
     <div class="panel">
-      <h2>차량별 보험료 한눈에 보기</h2>
-      <p class="panel-sub">차종을 하나씩 고르지 않고, 모든 차량을 보험사별 최신 견적가로 한 표에서 비교합니다 · 행마다 가장 저렴한 보험사가 초록색으로 표시됩니다 · 보험사 열 제목을 클릭하면 그 보험사 가격 기준으로 정렬됩니다 · 차종명을 클릭하면 "날짜별 보험료" 탭에서 상세 추이를 볼 수 있습니다.</p>
+      <h2>대당 보험료 — 보험시작일별 변동</h2>
+      <p class="panel-sub">제조사 → 차종 → 연식/상세모델/트림 → 세그먼트 순으로 좁혀서, 그 차량 한 대의 보험시작일별 보험사 가격과 전일 대비 변동률을 봅니다 · 행마다 가장 저렴한 보험사가 초록색으로 표시됩니다.</p>
+
+      <div class="filters">
+        <div>
+          <label for="pvMakerSel">제조사</label>
+          <select id="pvMakerSel"></select>
+        </div>
+        <div>
+          <label for="pvModelSel">차종</label>
+          <select id="pvModelSel"></select>
+        </div>
+        <div>
+          <label for="pvSpecSel">연식 / 상세모델 / 트림</label>
+          <select id="pvSpecSel"></select>
+        </div>
+        <div>
+          <label for="pvSegmentSel">세그먼트 (나이·성별)</label>
+          <select id="pvSegmentSel"></select>
+        </div>
+      </div>
+      <div class="cap-note">"미지정"은 아이디 태깅 없이 실행된 데이터입니다.</div>
+
+      <p class="panel-sub" id="pvMeta" style="margin-top:10px;"></p>
+      <div class="scroll-x" id="pvTableWrap"><p class="empty-note">불러오는 중…</p></div>
+    </div>
+
+    <div class="panel">
+      <h2>차종 전체 비교 (최신 견적가 기준)</h2>
+      <p class="panel-sub">위에서 고른 세그먼트 기준으로, 모든 차종을 보험사별 최신 견적가로 한 표에서 비교합니다 · 보험사 열 제목을 클릭하면 그 보험사 가격 기준 정렬 · 차종명을 클릭하면 위 상세 보기로 바로 전환됩니다.</p>
       <div class="filters" style="margin-bottom: 10px;">
         <div>
           <label for="pvSearch">차종 검색</label>
           <input type="text" id="pvSearch" placeholder="예: 쏘나타, 현대, Model 3">
         </div>
       </div>
-      <p class="panel-sub" id="pvMeta"></p>
-      <div class="scroll-x" id="pvTableWrap"><p class="empty-note">불러오는 중…</p></div>
+      <p class="panel-sub" id="pvAllMeta"></p>
+      <div class="scroll-x" id="pvAllTableWrap"><p class="empty-note">불러오는 중…</p></div>
     </div>
 
   </div><!-- /tab-pervehicle -->
@@ -1010,7 +1038,7 @@ function wireStaticEvents() {
     renderRanking();
   });
   el('downloadBtn').addEventListener('click', downloadRawXlsx);
-  el('pvSearch').addEventListener('input', renderPerVehicleTable);
+  el('pvSearch').addEventListener('input', renderPvAllTable);
 }
 
 const DATE_CSV_HEADER = ['번호', '실행시각', '차량번호', '보험시작일', '운전자범위', '보험사', '순위',
@@ -1071,15 +1099,17 @@ function setMoversFilter(f) {
   renderMovers();
 }
 
-// ── 대당 보험료 (차량별 × 보험사 매트릭스, 최신 견적가 기준) ──
-let pvRows = [];
-let pvCompanies = [];
-let pvSortCo = null; // null이면 차종명 가나다순, 아니면 그 보험사 가격 오름차순
+// ── 대당 보험료: 제조사/차종/스펙/세그먼트로 좁힌 차량 1대의 보험시작일별 가격·변동률
+//    + 같은 세그먼트 기준 전체 차종 비교표 (둘 다 quotes_by_date.csv 하나로 계산) ──
+let pvData = null;        // { lookup, vehicleLabels, segmentLabels, vehicleEntries }
+let pvSelectedVKey = null;
+let pvSelectedSKey = null;
+let pvAllSortCo = null;   // null이면 차종명 가나다순, 아니면 그 보험사 가격 오름차순
 
 async function initPerVehicleTab() {
   const wrapEl = el('pvTableWrap');
-  const metaEl = el('pvMeta');
   wrapEl.innerHTML = '<p class="empty-note">불러오는 중…</p>';
+  el('pvAllTableWrap').innerHTML = '<p class="empty-note">불러오는 중…</p>';
   let rows = [];
   try {
     const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
@@ -1087,39 +1117,141 @@ async function initPerVehicleTab() {
   } catch (e) {}
   if (!rows.length) {
     wrapEl.innerHTML = '<p class="empty-note">quotes_by_date.csv 파일이 없습니다.</p>';
+    el('pvAllTableWrap').innerHTML = '';
     return;
   }
 
-  const byVehicle = {}; // vKey -> {label, companies: {co: {total, time}}}
-  rows.forEach(r => {
-    const co = r[5], date = r[3], time = r[1];
-    const total = parsePriceStr(r[7]);
-    if (!co || !date || total == null) return;
-    const vKey = vehicleKeyOf(r);
-    if (!byVehicle[vKey]) byVehicle[vKey] = { label: vehicleLabelOf(r), companies: {} };
-    const ex = byVehicle[vKey].companies[co];
-    if (!ex || time > ex.time) byVehicle[vKey].companies[co] = { total, time };
+  const { lookup, vehicleLabels, segmentLabels } = buildDateLookup(rows);
+  const vehicleEntries = Object.keys(vehicleLabels).map(key => ({ key, ...parseVehicleKey(key) }));
+  const segmentKeys = Object.keys(segmentLabels).sort((a, b) => {
+    if (a === 'unset') return 1;
+    if (b === 'unset') return -1;
+    return segmentLabels[a].localeCompare(segmentLabels[b], 'ko');
   });
-  pvRows = Object.entries(byVehicle).map(([vKey, v]) => ({ vKey, label: v.label, companies: v.companies }));
+  pvData = { lookup, vehicleLabels, segmentLabels, vehicleEntries };
 
-  const coSet = new Set();
-  rows.forEach(r => { if (r[5]) coSet.add(r[5]); });
-  pvCompanies = DATE_INSURER_ORDER.filter(co => coSet.has(co));
-  coSet.forEach(co => { if (!pvCompanies.includes(co)) pvCompanies.push(co); });
+  const makerSelEl = el('pvMakerSel'), modelSelEl = el('pvModelSel'), specSelEl = el('pvSpecSel'), segmentSelEl = el('pvSegmentSel');
 
-  metaEl.textContent = `차종 ${pvRows.length}개 · 보험사 ${pvCompanies.length}개 · 보험사별로 각 차종의 가장 최근 조회가를 보여줍니다`;
-  renderPerVehicleTable();
+  function buildMakerOpts() {
+    const makers = uniq(vehicleEntries.map(e => e.maker)).sort((a, b) => a.localeCompare(b, 'ko'));
+    makerSelEl.innerHTML = makers.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+  }
+  function onMakerChg() {
+    const maker = makerSelEl.value;
+    const models = uniq(vehicleEntries.filter(e => e.maker === maker).map(e => e.model)).sort((a, b) => a.localeCompare(b, 'ko'));
+    modelSelEl.innerHTML = models.map(m => `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`).join('');
+    onModelChg();
+  }
+  function onModelChg() {
+    const maker = makerSelEl.value, model = modelSelEl.value;
+    const specs = vehicleEntries.filter(e => e.maker === maker && e.model === model);
+    specSelEl.innerHTML = specs.map(e =>
+      `<option value="${escapeHtml(e.key)}">${escapeHtml([e.year, e.detail, e.trim].filter(Boolean).join(' · ') || '-')}</option>`
+    ).join('');
+    onSpecChg();
+  }
+  function onSpecChg() {
+    pvSelectedVKey = specSelEl.value;
+    renderPvDetail();
+  }
+  function buildSegmentOpts() {
+    segmentSelEl.innerHTML = segmentKeys.map(k => `<option value="${escapeHtml(k)}">${escapeHtml(segmentLabels[k])}</option>`).join('');
+  }
+  function onSegmentChg() {
+    pvSelectedSKey = segmentSelEl.value;
+    renderPvDetail();
+    renderPvAllTable();
+  }
+
+  buildMakerOpts();
+  buildSegmentOpts();
+  onMakerChg();
+  pvSelectedSKey = segmentSelEl.value;
+
+  makerSelEl.addEventListener('change', onMakerChg);
+  modelSelEl.addEventListener('change', onModelChg);
+  specSelEl.addEventListener('change', onSpecChg);
+  segmentSelEl.addEventListener('change', onSegmentChg);
+
+  // "전체 비교" 표에서 차종명을 클릭하면 위 드롭다운을 그 차량으로 맞춰준다.
+  window.__selectPvVehicle = (vKey) => {
+    const entry = vehicleEntries.find(e => e.key === vKey);
+    if (!entry) return;
+    makerSelEl.value = entry.maker; onMakerChg();
+    modelSelEl.value = entry.model; onModelChg();
+    specSelEl.value = vKey; onSpecChg();
+    wrapEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  renderPvAllTable();
 }
 
-function renderPerVehicleTable() {
+function renderPvDetail() {
   const wrapEl = el('pvTableWrap');
-  if (!pvRows.length) return;
-  const q = (el('pvSearch').value || '').trim().toLowerCase();
-  let rows = pvRows.filter(v => !q || v.label.toLowerCase().includes(q));
+  const metaEl = el('pvMeta');
+  if (!pvData || !pvSelectedVKey || !pvSelectedSKey) return;
+  const byDate = pvData.lookup[pvSelectedVKey]?.[pvSelectedSKey] || {};
+  const dates = Object.keys(byDate).sort();
+  if (!dates.length) {
+    metaEl.textContent = '';
+    wrapEl.innerHTML = '<p class="empty-note">이 차종·세그먼트 조합에는 데이터가 없습니다.</p>';
+    return;
+  }
+  const coSet = new Set();
+  dates.forEach(d => Object.keys(byDate[d]).forEach(co => coSet.add(co)));
+  const companies = DATE_INSURER_ORDER.filter(co => coSet.has(co));
+  coSet.forEach(co => { if (!companies.includes(co)) companies.push(co); });
+  const changes = computeDateChanges(dates, companies, byDate);
 
-  if (pvSortCo) {
+  metaEl.textContent = `${pvData.vehicleLabels[pvSelectedVKey]} · ${pvData.segmentLabels[pvSelectedSKey]} · 보험시작일 ${dates.length}개 · 전일 대비 변동률은 0.5%p 이상일 때만 표시`;
+
+  const thead = `<thead><tr><th style="text-align:left;">보험시작일</th>${companies.map(co => `<th>${escapeHtml(co)}</th>`).join('')}</tr></thead>`;
+  const tbody = dates.map(d => {
+    const vals = companies.map(co => byDate[d]?.[co]?.total ?? null);
+    const present = vals.filter(v => v != null);
+    const minVal = present.length ? Math.min(...present) : null;
+    const cells = companies.map((co, i) => {
+      const v = vals[i];
+      if (v == null) return '<td>-</td>';
+      const chg = changes[d]?.[co];
+      const chgHtml = chg
+        ? `<br><span class="${chg.pct > 0 ? 'cmp-bad' : 'cmp-good'}" style="font-size:11px;">${fmtPct(chg.pct)}</span>`
+        : '';
+      const isMin = v === minVal;
+      return `<td class="${isMin ? 'cmp-good' : ''}" style="${isMin ? 'font-weight:700;' : ''}">${fmtWon(v)}${chgHtml}</td>`;
+    }).join('');
+    return `<tr><td style="text-align:left;">${d}</td>${cells}</tr>`;
+  }).join('');
+  wrapEl.innerHTML = `<table>${thead}<tbody>${tbody}</tbody></table>`;
+}
+
+function renderPvAllTable() {
+  const wrapEl = el('pvAllTableWrap');
+  const metaEl = el('pvAllMeta');
+  if (!pvData || !pvSelectedSKey) return;
+  const sKey = pvSelectedSKey;
+
+  const rowsOut = [];
+  pvData.vehicleEntries.forEach(e => {
+    const byDate = pvData.lookup[e.key]?.[sKey];
+    if (!byDate) return;
+    const dates = Object.keys(byDate).sort();
+    if (!dates.length) return;
+    const latestDate = dates[dates.length - 1];
+    rowsOut.push({ vKey: e.key, label: pvData.vehicleLabels[e.key], latestDate, companies: byDate[latestDate] });
+  });
+
+  const q = (el('pvSearch').value || '').trim().toLowerCase();
+  let rows = rowsOut.filter(v => !q || v.label.toLowerCase().includes(q));
+
+  const coSet = new Set();
+  rows.forEach(v => Object.keys(v.companies).forEach(co => coSet.add(co)));
+  const companies = DATE_INSURER_ORDER.filter(co => coSet.has(co));
+  coSet.forEach(co => { if (!companies.includes(co)) companies.push(co); });
+
+  if (pvAllSortCo) {
     rows = [...rows].sort((a, b) => {
-      const av = a.companies[pvSortCo]?.total, bv = b.companies[pvSortCo]?.total;
+      const av = a.companies[pvAllSortCo]?.total, bv = b.companies[pvAllSortCo]?.total;
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
@@ -1129,25 +1261,29 @@ function renderPerVehicleTable() {
     rows = [...rows].sort((a, b) => a.label.localeCompare(b.label, 'ko'));
   }
 
-  if (!rows.length) { wrapEl.innerHTML = '<p class="empty-note">검색 결과가 없습니다.</p>'; return; }
+  metaEl.textContent = `세그먼트: ${pvData.segmentLabels[sKey]} · 차종 ${rows.length}개 · 각 차종의 가장 최근 보험시작일 기준`;
+
+  if (!rows.length) { wrapEl.innerHTML = '<p class="empty-note">이 세그먼트엔 데이터가 없습니다.</p>'; return; }
 
   const thead = `<thead><tr>
     <th style="text-align:left;">차종</th>
-    ${pvCompanies.map(co => `<th class="pv-sortable" data-co="${escapeHtml(co)}" style="cursor:pointer;${pvSortCo === co ? 'text-decoration:underline;' : ''}">${escapeHtml(co)}</th>`).join('')}
+    <th style="text-align:left;">최근 보험시작일</th>
+    ${companies.map(co => `<th class="pv-sortable" data-co="${escapeHtml(co)}" style="cursor:pointer;${pvAllSortCo === co ? 'text-decoration:underline;' : ''}">${escapeHtml(co)}</th>`).join('')}
     <th>최저가</th>
   </tr></thead>`;
 
   const tbody = rows.map(v => {
-    const vals = pvCompanies.map(co => v.companies[co]?.total ?? null);
+    const vals = companies.map(co => v.companies[co]?.total ?? null);
     const present = vals.filter(x => x != null);
     const minVal = present.length ? Math.min(...present) : null;
-    const cells = pvCompanies.map((co, i) => {
+    const cells = companies.map((co, i) => {
       const val = vals[i];
       const isMin = val != null && val === minVal;
       return `<td class="${isMin ? 'cmp-good' : ''}" style="${isMin ? 'font-weight:700;' : ''}">${fmtWon(val)}</td>`;
     }).join('');
     return `<tr>
       <td class="pv-vehicle-link" data-vkey="${escapeHtml(v.vKey)}" style="text-align:left; cursor:pointer;">${escapeHtml(v.label)}</td>
+      <td style="text-align:left;">${v.latestDate}</td>
       ${cells}
       <td class="cmp-good" style="font-weight:700;">${fmtWon(minVal)}</td>
     </tr>`;
@@ -1156,13 +1292,12 @@ function renderPerVehicleTable() {
   wrapEl.innerHTML = `<table>${thead}<tbody>${tbody}</tbody></table>`;
   wrapEl.querySelectorAll('.pv-sortable').forEach(th => {
     th.addEventListener('click', () => {
-      const co = th.dataset.co;
-      pvSortCo = pvSortCo === co ? null : co;
-      renderPerVehicleTable();
+      pvAllSortCo = pvAllSortCo === th.dataset.co ? null : th.dataset.co;
+      renderPvAllTable();
     });
   });
   wrapEl.querySelectorAll('.pv-vehicle-link').forEach(td => {
-    td.addEventListener('click', () => jumpToVehicleInBydate(td.dataset.vkey));
+    td.addEventListener('click', () => { if (window.__selectPvVehicle) window.__selectPvVehicle(td.dataset.vkey); });
   });
 }
 
