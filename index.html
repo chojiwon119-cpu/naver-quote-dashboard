@@ -119,7 +119,7 @@
   }
   .filters { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
   .filters label { font-size: 12px; color: var(--text-muted); display: block; margin-bottom: 4px; }
-  .filters select {
+  .filters select, .filters input[type="text"] {
     min-width: 140px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--border);
     background: var(--chip-bg); color: var(--text-primary); font-size: 13px;
   }
@@ -262,6 +262,7 @@
     <button class="tab-nav-btn" role="tab" data-tab="vehicle" aria-selected="false">차종별 추이</button>
     <button class="tab-nav-btn active" role="tab" data-tab="bydate" aria-selected="true">날짜별 보험료</button>
     <button class="tab-nav-btn" role="tab" data-tab="insight" aria-selected="false">한화손보 인사이트</button>
+    <button class="tab-nav-btn" role="tab" data-tab="pervehicle" aria-selected="false">대당 보험료</button>
   </nav>
 
   <div id="tab-vehicle" class="tab-pane">
@@ -477,6 +478,23 @@
     </div>
 
   </div><!-- /tab-insight -->
+
+  <div id="tab-pervehicle" class="tab-pane">
+
+    <div class="panel">
+      <h2>차량별 보험료 한눈에 보기</h2>
+      <p class="panel-sub">차종을 하나씩 고르지 않고, 모든 차량을 보험사별 최신 견적가로 한 표에서 비교합니다 · 행마다 가장 저렴한 보험사가 초록색으로 표시됩니다 · 보험사 열 제목을 클릭하면 그 보험사 가격 기준으로 정렬됩니다 · 차종명을 클릭하면 "날짜별 보험료" 탭에서 상세 추이를 볼 수 있습니다.</p>
+      <div class="filters" style="margin-bottom: 10px;">
+        <div>
+          <label for="pvSearch">차종 검색</label>
+          <input type="text" id="pvSearch" placeholder="예: 쏘나타, 현대, Model 3">
+        </div>
+      </div>
+      <p class="panel-sub" id="pvMeta"></p>
+      <div class="scroll-x" id="pvTableWrap"><p class="empty-note">불러오는 중…</p></div>
+    </div>
+
+  </div><!-- /tab-pervehicle -->
 
 </div>
 
@@ -992,6 +1010,7 @@ function wireStaticEvents() {
     renderRanking();
   });
   el('downloadBtn').addEventListener('click', downloadRawXlsx);
+  el('pvSearch').addEventListener('input', renderPerVehicleTable);
 }
 
 const DATE_CSV_HEADER = ['번호', '실행시각', '차량번호', '보험시작일', '운전자범위', '보험사', '순위',
@@ -1052,6 +1071,101 @@ function setMoversFilter(f) {
   renderMovers();
 }
 
+// ── 대당 보험료 (차량별 × 보험사 매트릭스, 최신 견적가 기준) ──
+let pvRows = [];
+let pvCompanies = [];
+let pvSortCo = null; // null이면 차종명 가나다순, 아니면 그 보험사 가격 오름차순
+
+async function initPerVehicleTab() {
+  const wrapEl = el('pvTableWrap');
+  const metaEl = el('pvMeta');
+  wrapEl.innerHTML = '<p class="empty-note">불러오는 중…</p>';
+  let rows = [];
+  try {
+    const res = await fetch('quotes_by_date.csv?t=' + Date.now(), { cache: 'no-store' });
+    if (res.ok) rows = parseDateCsv(await res.text());
+  } catch (e) {}
+  if (!rows.length) {
+    wrapEl.innerHTML = '<p class="empty-note">quotes_by_date.csv 파일이 없습니다.</p>';
+    return;
+  }
+
+  const byVehicle = {}; // vKey -> {label, companies: {co: {total, time}}}
+  rows.forEach(r => {
+    const co = r[5], date = r[3], time = r[1];
+    const total = parsePriceStr(r[7]);
+    if (!co || !date || total == null) return;
+    const vKey = vehicleKeyOf(r);
+    if (!byVehicle[vKey]) byVehicle[vKey] = { label: vehicleLabelOf(r), companies: {} };
+    const ex = byVehicle[vKey].companies[co];
+    if (!ex || time > ex.time) byVehicle[vKey].companies[co] = { total, time };
+  });
+  pvRows = Object.entries(byVehicle).map(([vKey, v]) => ({ vKey, label: v.label, companies: v.companies }));
+
+  const coSet = new Set();
+  rows.forEach(r => { if (r[5]) coSet.add(r[5]); });
+  pvCompanies = DATE_INSURER_ORDER.filter(co => coSet.has(co));
+  coSet.forEach(co => { if (!pvCompanies.includes(co)) pvCompanies.push(co); });
+
+  metaEl.textContent = `차종 ${pvRows.length}개 · 보험사 ${pvCompanies.length}개 · 보험사별로 각 차종의 가장 최근 조회가를 보여줍니다`;
+  renderPerVehicleTable();
+}
+
+function renderPerVehicleTable() {
+  const wrapEl = el('pvTableWrap');
+  if (!pvRows.length) return;
+  const q = (el('pvSearch').value || '').trim().toLowerCase();
+  let rows = pvRows.filter(v => !q || v.label.toLowerCase().includes(q));
+
+  if (pvSortCo) {
+    rows = [...rows].sort((a, b) => {
+      const av = a.companies[pvSortCo]?.total, bv = b.companies[pvSortCo]?.total;
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      return av - bv;
+    });
+  } else {
+    rows = [...rows].sort((a, b) => a.label.localeCompare(b.label, 'ko'));
+  }
+
+  if (!rows.length) { wrapEl.innerHTML = '<p class="empty-note">검색 결과가 없습니다.</p>'; return; }
+
+  const thead = `<thead><tr>
+    <th style="text-align:left;">차종</th>
+    ${pvCompanies.map(co => `<th class="pv-sortable" data-co="${escapeHtml(co)}" style="cursor:pointer;${pvSortCo === co ? 'text-decoration:underline;' : ''}">${escapeHtml(co)}</th>`).join('')}
+    <th>최저가</th>
+  </tr></thead>`;
+
+  const tbody = rows.map(v => {
+    const vals = pvCompanies.map(co => v.companies[co]?.total ?? null);
+    const present = vals.filter(x => x != null);
+    const minVal = present.length ? Math.min(...present) : null;
+    const cells = pvCompanies.map((co, i) => {
+      const val = vals[i];
+      const isMin = val != null && val === minVal;
+      return `<td class="${isMin ? 'cmp-good' : ''}" style="${isMin ? 'font-weight:700;' : ''}">${fmtWon(val)}</td>`;
+    }).join('');
+    return `<tr>
+      <td class="pv-vehicle-link" data-vkey="${escapeHtml(v.vKey)}" style="text-align:left; cursor:pointer;">${escapeHtml(v.label)}</td>
+      ${cells}
+      <td class="cmp-good" style="font-weight:700;">${fmtWon(minVal)}</td>
+    </tr>`;
+  }).join('');
+
+  wrapEl.innerHTML = `<table>${thead}<tbody>${tbody}</tbody></table>`;
+  wrapEl.querySelectorAll('.pv-sortable').forEach(th => {
+    th.addEventListener('click', () => {
+      const co = th.dataset.co;
+      pvSortCo = pvSortCo === co ? null : co;
+      renderPerVehicleTable();
+    });
+  });
+  wrapEl.querySelectorAll('.pv-vehicle-link').forEach(td => {
+    td.addEventListener('click', () => jumpToVehicleInBydate(td.dataset.vkey));
+  });
+}
+
 function setMetric(m) {
   metric = m;
   el('metricTotal').classList.toggle('active', m === 'total');
@@ -1074,6 +1188,7 @@ boot();
 // ── 탭 전환 ── (기본 활성 탭: 날짜별 보험료 — 페이지 열자마자 바로 로드)
 let _dateInited = false;
 let _insightInited = false;
+let _pvInited = false;
 // 인사이트 탭에서 "날짜별 보험료" 탭으로 드릴다운할 때, initDateTab()의 select 요소가
 // 채워질 때까지 기다리기 위한 신호 — initDateTab 맨 끝에서 resolve 된다.
 let _resolveDateTabReady;
@@ -1100,6 +1215,10 @@ _dateInited = true;
       if (tab === 'insight' && !_insightInited) {
         _insightInited = true;
         initInsightTab();
+      }
+      if (tab === 'pervehicle' && !_pvInited) {
+        _pvInited = true;
+        initPerVehicleTab();
       }
     });
   });
